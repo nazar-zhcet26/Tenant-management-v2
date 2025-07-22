@@ -23,7 +23,7 @@ const LandingPage = () => {
       {/* Single “Continue” button */}
       <button
         onClick={() => navigate('/login')}
-        className="px-8 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-black font-semibold transition-transform transform hover:scale-105"
+        className="px-8 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-semibold transition-transform transform hover:scale-105"
       >
         Continue
       </button>
