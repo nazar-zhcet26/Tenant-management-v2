@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { supabase } from './supabase';
 import LandingPage from './components/LandingPage';
-import LoginPage from './components/LoginPage';
+import Login from './components/Login';
 import Signup from './components/Signup';
 import MaintenanceReporter from './components/MaintenanceReporter';
 import LandlordDashboard from './components/LandlordDashboard';
