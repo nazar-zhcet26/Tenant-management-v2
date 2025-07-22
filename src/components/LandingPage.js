@@ -1,8 +1,9 @@
 
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import logo from '../assets/logo.png'; // Make sure your logo is placed here
-
+"import logo from '../assets/logo.png'; // Make sure your logo is placed here
+<img src="/logo.png" alt="Company Logo" className="h-12 w-12" />
+    
 const LandingPage = () => {
     const navigate = useNavigate();
 
