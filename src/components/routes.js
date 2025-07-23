@@ -7,6 +7,7 @@ import Signup from './Signup';
 import MaintenanceReporter from './MaintenanceReporter';
 import LandlordDashboard from './LandlordDashboard';
 import ProtectedRoute from './ProtectedRoute';
+import CheckYourEmail from './components/CheckYourEmail';
 
 const AppRoutes = ({ session, role }) => (
   <Routes>
@@ -14,6 +15,7 @@ const AppRoutes = ({ session, role }) => (
     <Route path="/" element={<LandingPage />} />
     <Route path="/login" element={<Login />} />
     <Route path="/signup" element={<Signup />} />
+    <Route path="/check-your-email" element={<CheckYourEmail />} />
 
     {/* Tenant-only reporting */}
     <Route
