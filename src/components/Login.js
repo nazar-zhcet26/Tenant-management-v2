@@ -1,79 +1,101 @@
 // src/components/Login.js
-import React, { useState } from 'react';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../supabase';
 
 export default function Login() {
-  const { search } = useLocation();
-  const params = new URLSearchParams(search);
-  const role = params.get('role') || 'tenant';
+  const [email,   setEmail  ] = useState('');
+  const [password,setPass   ] = useState('');
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const role = searchParams.get('role') || 'tenant';
 
-  const [email, setEmail]     = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading]   = useState(false);
-
-  const handleLogin = async () => {
+  const handleLogin = async (e) => {
+    e.preventDefault();
     setLoading(true);
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+
+    // 1) Sign in
+    const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+
+    if (loginError) {
+      setLoading(false);
+      return alert('Login error: ' + loginError.message);
+    }
+
+    const user = loginData.user;
+
+    // 2) Upsert profile (now that auth.uid() exists)
+    const { error: upsertError } = await supabase
+      .from('profiles')
+      .upsert({
+        id: user.id,
+        email: user.email,
+        full_name: user.user_metadata.full_name || '',
+        role
+      }, { onConflict: 'id' });
+
+    if (upsertError) {
+      console.warn('Profile upsert failed:', upsertError.message);
+      // We do NOT block the login—just proceed
+    }
+
+    // 3) Redirect into the app
     setLoading(false);
-    if (error) return alert(error.message);
-    navigate(role === 'tenant' ? '/report' : '/dashboard');
+    if (role === 'tenant') {
+      navigate('/report');
+    } else {
+      navigate('/dashboard');
+    }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center px-4">
-      <div className="w-full max-w-md bg-white/10 backdrop-blur-lg rounded-3xl p-8 border border-white/20 shadow-lg">
-        <h2 className="text-2xl font-bold text-white mb-6 text-center">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
+      <form onSubmit={handleLogin} className="bg-white/10 backdrop-blur-lg p-8 rounded-3xl border border-white/20 space-y-6 max-w-sm w-full">
+        <h2 className="text-2xl font-semibold text-white text-center">
           Log in as {role.charAt(0).toUpperCase() + role.slice(1)}
         </h2>
 
-        <div className="space-y-4">
-          <div>
-            <label className="block text-gray-200 mb-1">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl bg-white/20 text-white placeholder-gray-300 border border-white/30 focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-              placeholder="you@example.com"
-            />
-          </div>
+        <input
+          type="email"
+          placeholder="Email Address"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+          className="w-full px-4 py-3 rounded-lg bg-white/20 text-white placeholder-gray-300 focus:outline-none"
+        />
 
-          <div>
-            <label className="block text-gray-200 mb-1">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl bg-white/20 text-white placeholder-gray-300 border border-white/30 focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-              placeholder="••••••••"
-            />
-          </div>
+        <input
+          type="password"
+          placeholder="Password"
+          value={password}
+          onChange={(e) => setPass(e.target.value)}
+          required
+          className="w-full px-4 py-3 rounded-lg bg-white/20 text-white placeholder-gray-300 focus:outline-none"
+        />
 
-          <button
-            onClick={handleLogin}
-            disabled={loading}
-            className={`w-full mt-4 py-3 font-semibold rounded-xl transition ${
-              loading
-                ? 'bg-gray-600 text-gray-300 cursor-not-allowed'
-                : 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:from-blue-700 hover:to-purple-700 shadow-lg shadow-blue-500/25'
-            }`}
-          >
-            {loading ? 'Logging in…' : 'Log In'}
-          </button>
-        </div>
+        <button
+          type="submit"
+          disabled={loading}
+          className={`w-full py-3 font-bold rounded-lg transition ${
+            loading
+              ? 'bg-gray-600 cursor-not-allowed'
+              : 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700'
+          } text-white`}
+        >
+          {loading ? 'Logging in...' : 'Log in'}
+        </button>
 
-        <p className="mt-6 text-center text-gray-300 text-sm">
-          Don’t have an account?{' '}
-          <Link
-            to={`/signup?role=${role}`}
-            className="text-blue-400 hover:underline"
-          >
+        <p className="text-center text-gray-300 text-sm">
+          Need an account?{' '}
+          <a href={`/signup?role=${role}`} className="underline hover:text-white">
             Sign up
-          </Link>
+          </a>
         </p>
-      </div>
+      </form>
     </div>
   );
 }
