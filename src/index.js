@@ -1,12 +1,10 @@
-// src/index.js
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App';
 import './index.css';
+import AppRoutes from './components/routes';  // wherever your routes file lives
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(
+ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <App />
+    <AppRoutes />
   </React.StrictMode>
 );
