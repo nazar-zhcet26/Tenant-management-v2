@@ -1,103 +1,95 @@
 // src/components/Signup.js
-import React, { useState } from 'react';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../supabase';
 
 export default function Signup() {
-  const { search } = useLocation();
-  const role     = new URLSearchParams(search).get('role') || 'tenant';
-  const navigate = useNavigate();
-
-  const [email, setEmail]       = useState('');
-  const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [loading, setLoading]   = useState(false);
+  const [email,    setEmail   ] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading,  setLoading ] = useState(false);
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const role = searchParams.get('role') || 'tenant';
 
-  const handleSignup = async () => {
+  const handleSignup = async (e) => {
+    e.preventDefault();
     setLoading(true);
 
-    // 1) Sign up & send magic-link to production login URL
-    const { data: signUpData, error: signUpError } = 
-      await supabase.auth.signUp(
-        { email, password },
-        {
-          // replace with your actual Vercel domain
-          redirectTo: `${window.location.origin}/login?role=${role}`
-        }
-      );
+    // 1) Trigger Supabase magic-link signup
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { full_name: fullName, role }
+      }
+    });
+
     if (signUpError) {
       setLoading(false);
-      return alert(`Sign-up error: ${signUpError.message}`);
+      return alert('Sign-up error: ' + signUpError.message);
     }
 
-    // 2) Insert profile row
-    const userId = signUpData.user.id;
-    const { error: profileError } = 
-      await supabase
-        .from('profiles')
-        .insert([{ id: userId, email, full_name: fullName, role }]);
-
-    if (profileError) {
-      console.error('Profile insert failed:', profileError);
-      setLoading(false);
-      return alert(`Profile setup error: ${profileError.message}`);
-    }
+    // 2) No profile.insert here — wait until login when auth.uid() exists
 
     setLoading(false);
-    // 3) Send user to “check your email” page
+    // 3) Navigate to our “please check your email” screen
     navigate('/check-your-email');
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-white/10 backdrop-blur-lg rounded-3xl p-8 border border-white/20 shadow-lg space-y-6">
-        <h2 className="text-2xl font-bold text-white text-center">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
+      <form onSubmit={handleSignup} className="bg-white/10 backdrop-blur-lg p-8 rounded-3xl border border-white/20 space-y-6 max-w-sm w-full">
+        <h2 className="text-2xl font-semibold text-white text-center">
           Sign up as {role.charAt(0).toUpperCase() + role.slice(1)}
         </h2>
 
         <input
           type="text"
-          value={fullName}
-          onChange={e => setFullName(e.target.value)}
           placeholder="Full Name"
-          className="w-full px-4 py-3 rounded-xl bg-white/20 text-white placeholder-gray-300 border border-white/30 focus:ring-2 focus:ring-green-400 focus:border-transparent"
+          value={fullName}
+          onChange={(e) => setFullName(e.target.value)}
+          required
+          className="w-full px-4 py-3 rounded-lg bg-white/20 text-white placeholder-gray-300 focus:outline-none"
         />
 
         <input
           type="email"
+          placeholder="Email Address"
           value={email}
-          onChange={e => setEmail(e.target.value)}
-          placeholder="you@example.com"
-          className="w-full px-4 py-3 rounded-xl bg-white/20 text-white placeholder-gray-300 border border-white/30 focus:ring-2 focus:ring-green-400 focus:border-transparent"
+          onChange={(e) => setEmail(e.target.value)}
+          required
+          className="w-full px-4 py-3 rounded-lg bg-white/20 text-white placeholder-gray-300 focus:outline-none"
         />
 
         <input
           type="password"
+          placeholder="Password"
           value={password}
-          onChange={e => setPassword(e.target.value)}
-          placeholder="••••••••"
-          className="w-full px-4 py-3 rounded-xl bg-white/20 text-white placeholder-gray-300 border border-white/30 focus:ring-2 focus:ring-green-400 focus:border-transparent"
+          onChange={(e) => setPassword(e.target.value)}
+          required
+          className="w-full px-4 py-3 rounded-lg bg-white/20 text-white placeholder-gray-300 focus:outline-none"
         />
 
         <button
-          onClick={handleSignup}
+          type="submit"
           disabled={loading}
-          className={`w-full py-3 font-semibold rounded-xl transition ${
+          className={`w-full py-3 font-bold rounded-lg transition ${
             loading
-              ? 'bg-gray-600 text-gray-300 cursor-not-allowed'
-              : 'bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:from-green-700 hover:to-emerald-700 shadow-lg shadow-green-500/25'
-          }`}
+              ? 'bg-gray-600 cursor-not-allowed'
+              : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700'
+          } text-white`}
         >
-          {loading ? 'Signing up…' : 'Sign Up'}
+          {loading ? 'Signing up...' : 'Sign up'}
         </button>
 
         <p className="text-center text-gray-300 text-sm">
           Already have an account?{' '}
-          <Link to={`/login?role=${role}`} className="text-blue-400 hover:underline">
+          <a href={`/login?role=${role}`} className="underline hover:text-white">
             Log in
-          </Link>
+          </a>
         </p>
-      </div>
+      </form>
     </div>
   );
 }
