@@ -1,10 +1,12 @@
+// src/index.js
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
-import AppRoutes from './components/routes';  // wherever your routes file lives
+import App from './App';        // your App.js that does supabase.auth.getSession(...) and renders <AppRoutes session={session} role={role} />
 
-ReactDOM.createRoot(document.getElementById('root')).render(
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(
   <React.StrictMode>
-    <AppRoutes />
+    <App />
   </React.StrictMode>
 );
