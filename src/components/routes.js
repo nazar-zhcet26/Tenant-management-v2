@@ -8,39 +8,36 @@ import MaintenanceReporter from './MaintenanceReporter';
 import LandlordDashboard from './LandlordDashboard';
 import ProtectedRoute from './ProtectedRoute';
 
-const AppRoutes = ({ session, role }) => {
-    return (
-        <Routes>
-            {/* Public Routes */}
-            <Route path="/" element={<LandingPage />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/signup" element={<Signup />} />
+const AppRoutes = ({ session, role }) => (
+  <Routes>
+    {/* Public routes */}
+    <Route path="/" element={<LandingPage />} />
+    <Route path="/login" element={<Login />} />
+    <Route path="/signup" element={<Signup />} />
 
-            {/* Tenant-only (Protected) */}
-            <Route
-                path="/report"
-                element={
-                    <ProtectedRoute session={session} role={role} allowedRole="tenant">
-                        <MaintenanceReporter />
-                    </ProtectedRoute>
-                }
-            />
+    {/* Tenant-only reporting */}
+    <Route
+      path="/report"
+      element={
+        <ProtectedRoute session={session} role={role} allowedRole="tenant">
+          <MaintenanceReporter />
+        </ProtectedRoute>
+      }
+    />
 
-            {/* Landlord-only (Protected) */}
-            <Route
-                path="/dashboard"
-                element={
-                    <ProtectedRoute session={session} role={role} allowedRole="landlord">
-                        <LandlordDashboard />
-                    </ProtectedRoute>
-                }
-            />
+    {/* Landlord-only dashboard */}
+    <Route
+      path="/dashboard"
+      element={
+        <ProtectedRoute session={session} role={role} allowedRole="landlord">
+          <LandlordDashboard />
+        </ProtectedRoute>
+      }
+    />
 
-            {/* Fallback */}
-            <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-    );
-};
+    {/* Fallback to landing */}
+    <Route path="*" element={<Navigate to="/" replace />} />
+  </Routes>
+);
 
 export default AppRoutes;
-
