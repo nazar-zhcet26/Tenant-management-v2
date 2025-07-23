@@ -1,70 +1,50 @@
+// src/App.js
 import React, { useEffect, useState } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter } from 'react-router-dom';
+import AppRoutes from './components/routes';
 import { supabase } from './supabase';
-import LandingPage from './components/LandingPage';
-import Login from './components/Login';
-import Signup from './components/Signup';
-import MaintenanceReporter from './components/MaintenanceReporter';
-import LandlordDashboard from './components/LandlordDashboard';
-import ProtectedRoute from './components/ProtectedRoute';
+import './App.css';
 
-const App = () => {
+function App() {
   const [session, setSession] = useState(null);
   const [role, setRole] = useState(null);
 
   useEffect(() => {
+    // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       if (session) fetchUserRole(session.user.id);
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) fetchUserRole(session.user.id);
+    // Listen for auth changes
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      if (newSession) fetchUserRole(newSession.user.id);
       else setRole(null);
     });
 
-    return () => {
-      listener.subscription.unsubscribe();
-    };
+    return () => listener.subscription.unsubscribe();
   }, []);
 
-  const fetchUserRole = async (userId) => {
+  async function fetchUserRole(userId) {
     const { data, error } = await supabase
       .from('profiles')
       .select('role')
       .eq('id', userId)
       .single();
-    if (data) setRole(data.role);
-    else console.error('Error fetching user role:', error);
-  };
+
+    if (error) {
+      console.error('Error fetching role:', error);
+    } else {
+      setRole(data.role);
+    }
+  }
 
   return (
-    <Router>
-      <Routes>
-        <Route path="/" element={<LandingPage />} />
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/signup" element={<Signup />} />
-        <Route
-          path="/dashboard"
-          element={
-            <ProtectedRoute session={session} role={role} allowedRole="landlord">
-              <LandlordDashboard />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/report"
-          element={
-            <ProtectedRoute session={session} role={role} allowedRole="tenant">
-              <MaintenanceReporter />
-            </ProtectedRoute>
-          }
-        />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Router>
+    <BrowserRouter>
+      <AppRoutes session={session} role={role} />
+    </BrowserRouter>
   );
-};
+}
 
 export default App;
