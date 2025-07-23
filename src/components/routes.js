@@ -7,7 +7,7 @@ import Signup from './Signup';
 import MaintenanceReporter from './MaintenanceReporter';
 import LandlordDashboard from './LandlordDashboard';
 import ProtectedRoute from './ProtectedRoute';
-import CheckYourEmail from './components/CheckYourEmail';
+import CheckYourEmail from './CheckYourEmail';
 
 const AppRoutes = ({ session, role }) => (
   <Routes>
