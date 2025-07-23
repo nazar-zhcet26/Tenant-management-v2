@@ -9,37 +9,38 @@ import LandlordDashboard from './LandlordDashboard';
 import ProtectedRoute from './ProtectedRoute';
 import CheckYourEmail from './CheckYourEmail';
 
-const AppRoutes = ({ session, role }) => (
-  <Routes>
-    {/* Public routes */}
-    <Route path="/" element={<LandingPage />} />
-    <Route path="/login" element={<Login />} />
-    <Route path="/signup" element={<Signup />} />
-    <Route path="/check-your-email" element={<CheckYourEmail />} />
+export default function AppRoutes() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Signup />} />
+        <Route path="/check-your-email" element={<CheckYourEmail />} />
 
-    {/* Tenant-only reporting */}
-    <Route
-      path="/report"
-      element={
-        <ProtectedRoute session={session} role={role} allowedRole="tenant">
-          <MaintenanceReporter />
-        </ProtectedRoute>
-      }
-    />
+        {/* Tenant-only */}
+        <Route
+          path="/report"
+          element={
+            <ProtectedRoute allowedRole="tenant">
+              <MaintenanceReporter />
+            </ProtectedRoute>
+          }
+        />
 
-    {/* Landlord-only dashboard */}
-    <Route
-      path="/dashboard"
-      element={
-        <ProtectedRoute session={session} role={role} allowedRole="landlord">
-          <LandlordDashboard />
-        </ProtectedRoute>
-      }
-    />
+        {/* Landlord-only */}
+        <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute allowedRole="landlord">
+              <LandlordDashboard />
+            </ProtectedRoute>
+          }
+        />
 
-    {/* Fallback to landing */}
-    <Route path="*" element={<Navigate to="/" replace />} />
-  </Routes>
-);
-
-export default AppRoutes;
+        {/* fallback */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
