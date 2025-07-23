@@ -44,7 +44,7 @@ const LandingPage = () => {
         <img
           src="/logo.png"
           alt="Freedom Facilities Logo"
-          className="w-32 h-32 mb-6 rounded-full shadow-lg"
+          className="w-45 h-45 mb-6 rounded-full shadow-lg"
         />
         <p className="text-lg text-purple-200 mb-12">
           Welcome to Property Management Service by Freedom Facilities
