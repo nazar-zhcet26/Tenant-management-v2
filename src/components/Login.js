@@ -4,12 +4,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../supabase';
 
 export default function Login() {
-  const [email,   setEmail  ] = useState('');
-  const [password,setPass   ] = useState('');
+  const [email, setEmail]     = useState('');
+  const [password, setPass]   = useState('');
   const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const role = searchParams.get('role') || 'tenant';
+  const navigate              = useNavigate();
+  const [searchParams]        = useSearchParams();
+  const role                  = searchParams.get('role') || 'tenant';
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -18,32 +18,29 @@ export default function Login() {
     // 1) Sign in
     const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
       email,
-      password
+      password,
     });
-
     if (loginError) {
       setLoading(false);
       return alert('Login error: ' + loginError.message);
     }
-
     const user = loginData.user;
 
-    // 2) Upsert profile (now that auth.uid() exists)
+    // 2) Upsert profile (so RLS policies allow it)
     const { error: upsertError } = await supabase
       .from('profiles')
-      .upsert({
-        id: user.id,
-        email: user.email,
-        full_name: user.user_metadata.full_name || '',
-        role
-      }, { onConflict: 'id' });
+      .upsert(
+        {
+          id: user.id,
+          email: user.email,
+          full_name: user.user_metadata.full_name || '',
+          role,
+        },
+        { onConflict: 'id' }
+      );
+    if (upsertError) console.warn('Profile upsert failed:', upsertError.message);
 
-    if (upsertError) {
-      console.warn('Profile upsert failed:', upsertError.message);
-      // We do NOT block the login—just proceed
-    }
-
-    // 3) Redirect into the app
+    // 3) Route them into the right page
     setLoading(false);
     if (role === 'tenant') {
       navigate('/report');
