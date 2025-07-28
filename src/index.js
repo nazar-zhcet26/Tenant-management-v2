@@ -1,12 +1,13 @@
 // src/index.js
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import './index.css';
-import App from './App';        // your App.js that does supabase.auth.getSession(...) and renders <AppRoutes session={session} role={role} />
+import { BrowserRouter } from 'react-router-dom';
+import './index.css';  // your Tailwind imports
+import App from './App';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
-  <React.StrictMode>
+  <BrowserRouter>
     <App />
-  </React.StrictMode>
+  </BrowserRouter>
 );
