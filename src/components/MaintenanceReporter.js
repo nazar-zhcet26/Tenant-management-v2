@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { maintenanceAPI } from '../supabase';
+import { supabase } from '../supabase';
 import {
   Camera, Upload, AlertCircle, CheckCircle, MapPin, Home, Shield, Zap, Star,
   Send, FileImage, FileVideo, X, Plus, ChevronRight, Calendar, User
