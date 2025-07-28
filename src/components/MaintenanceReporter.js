@@ -190,16 +190,22 @@ const MaintenanceReporter = () => {
     }
     setIsSubmitting(true);
     try {
-      // 1) Insert report
-      const saved = await maintenanceAPI.submitReport({
-        title: currentReport.title,
-        description: currentReport.description,
-        category: currentReport.category,
-        location: currentReport.location,
-        urgency: currentReport.urgency,
-        coordinates: currentReport.coordinates,
-        address: currentReport.address,
-        created_by: user.id
+      // Fetch user every time you submit!
+    const { data, error } = await supabase.auth.getUser();
+    if (error) throw error;
+    const user = data.user;
+    if (!user) throw new Error('No authenticated user');
+
+    // Pass created_by with the user ID
+    const saved = await maintenanceAPI.submitReport({
+      title: currentReport.title,
+      description: currentReport.description,
+      category: currentReport.category,
+      location: currentReport.location,
+      urgency: currentReport.urgency,
+      coordinates: currentReport.coordinates,
+      address: currentReport.address,
+      created_by: user.id // <- Use the ID here
       });
 
       // 2) Upload files & save attachments
