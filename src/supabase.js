@@ -7,18 +7,22 @@ export const supabase = createClient(supabaseUrl, supabaseKey);
 
 export const maintenanceAPI = {
   async submitReport(reportData) {
-    const { data, error } = await supabase
-      .from('maintenance_reports')
-      .insert([{
-        ...reportData,
-        latitude: reportData.coordinates?.lat,
-        longitude: reportData.coordinates?.lng
-      }])
-      .select();
+  // Destructure coordinates so it's NOT passed to DB
+  const { coordinates, ...rest } = reportData;
 
-    if (error) throw error;
-    return data[0];
-  },
+  const { data, error } = await supabase
+    .from('maintenance_reports')
+    .insert([{
+      ...rest,
+      latitude: coordinates?.lat,
+      longitude: coordinates?.lng
+    }])
+    .select();
+
+  if (error) throw error;
+  return data[0];
+},
+
 
   async getReports() {
     const { data, error } = await supabase
