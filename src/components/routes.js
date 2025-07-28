@@ -18,6 +18,7 @@ export default function AppRoutes({ session, role }) {
       <Route path="/login"              element={<Login />} />
       <Route path="/signup"             element={<Signup />} />
       <Route path="/check-your-email"   element={<CheckYourEmail />} />
+      <Route path="/test-reporter" element={<MaintenanceReporter />} />
 
       {/* Tenant-only */}
       <Route
