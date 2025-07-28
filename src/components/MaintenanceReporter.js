@@ -1,5 +1,3 @@
-// src/components/MaintenanceReporter.js
-
 import React, { useState, useEffect, useRef } from 'react';
 import { maintenanceAPI } from '../supabase';
 import { supabase } from '../supabase';
@@ -30,9 +28,21 @@ const urgencyLevels = {
 
 const MaintenanceReporter = () => {
   const [reports, setReports] = useState([]);
+  const [properties, setProperties] = useState([]); // NEW
   const [currentReport, setCurrentReport] = useState({
-    id: null, title: '', description: '', category: '', location: '', urgency: 'medium',
-    photos: [], videos: [], status: 'pending', dateSubmitted: null, coordinates: null, address: ''
+    id: null,
+    property_id: '', // NEW
+    title: '',
+    description: '',
+    category: '',
+    location: '',
+    urgency: 'medium',
+    photos: [],
+    videos: [],
+    status: 'pending',
+    dateSubmitted: null,
+    coordinates: null,
+    address: ''
   });
   const [showForm, setShowForm] = useState(true);
   const [dragActive, setDragActive] = useState(false);
@@ -42,8 +52,22 @@ const MaintenanceReporter = () => {
   const fileInputRef = useRef(null);
   const videoInputRef = useRef(null);
 
-  // Fetch existing reports on mount
+  // Fetch properties and existing reports on mount
   useEffect(() => {
+    // Fetch all properties for dropdown
+    (async () => {
+      try {
+        const { data: propertyData, error: propError } = await supabase
+          .from('properties')
+          .select('*');
+        if (propError) throw propError;
+        setProperties(propertyData || []);
+      } catch (err) {
+        console.error('Error fetching properties:', err.message);
+      }
+    })();
+
+    // Fetch reports as before
     (async () => {
       try {
         const data = await maintenanceAPI.getReports();
@@ -58,7 +82,8 @@ const MaintenanceReporter = () => {
     setCurrentReport(prev => ({ ...prev, [field]: value }));
   };
 
-  // Get user's current location
+  // --- The rest of your code is unchanged ---
+
   const getCurrentLocation = () => {
     if (!navigator.geolocation) {
       alert('Geolocation not supported');
@@ -70,7 +95,6 @@ const MaintenanceReporter = () => {
         const { latitude, longitude } = position.coords;
         const coordinates = { lat: latitude, lng: longitude };
         try {
-          // (Optional) reverse geocode
           const response = await fetch(
             `https://api.opencagedata.com/geocode/v1/json?q=${latitude}+${longitude}&key=YOUR_OPENCAGE_API_KEY`
           );
@@ -184,29 +208,34 @@ const MaintenanceReporter = () => {
     if (videos.length > 0) handleFileUpload(videos, 'videos');
   };
 
+  // 🟢 ADD property_id and created_by when submitting
   const submitReport = async () => {
-    if (!currentReport.title || !currentReport.description || !currentReport.category) {
-      alert('Please fill in all required fields');
+    if (
+      !currentReport.property_id ||
+      !currentReport.title ||
+      !currentReport.description ||
+      !currentReport.category
+    ) {
+      alert('Please fill in all required fields (including property).');
       return;
     }
     setIsSubmitting(true);
     try {
-      // Fetch user every time you submit!
-    const { data, error } = await supabase.auth.getUser();
-    if (error) throw error;
-    const user = data.user;
-    if (!user) throw new Error('No authenticated user');
+      const { data, error } = await supabase.auth.getUser();
+      if (error) throw error;
+      const user = data.user;
+      if (!user) throw new Error('No authenticated user');
 
-    // Pass created_by with the user ID
-    const saved = await maintenanceAPI.submitReport({
-      title: currentReport.title,
-      description: currentReport.description,
-      category: currentReport.category,
-      location: currentReport.location,
-      urgency: currentReport.urgency,
-      coordinates: currentReport.coordinates,
-      address: currentReport.address,
-      created_by: user.id // <- Use the ID here
+      const saved = await maintenanceAPI.submitReport({
+        property_id: currentReport.property_id,
+        title: currentReport.title,
+        description: currentReport.description,
+        category: currentReport.category,
+        location: currentReport.location,
+        urgency: currentReport.urgency,
+        coordinates: currentReport.coordinates,
+        address: currentReport.address,
+        created_by: user.id
       });
 
       // 2) Upload files & save attachments
@@ -245,8 +274,19 @@ const MaintenanceReporter = () => {
         ...prev
       ]);
       setCurrentReport({
-        id: null, title: '', description: '', category: '', location: '', urgency: 'medium',
-        photos: [], videos: [], status: 'pending', dateSubmitted: null, coordinates: null, address: ''
+        id: null,
+        property_id: '',
+        title: '',
+        description: '',
+        category: '',
+        location: '',
+        urgency: 'medium',
+        photos: [],
+        videos: [],
+        status: 'pending',
+        dateSubmitted: null,
+        coordinates: null,
+        address: ''
       });
       alert('✅ Maintenance request submitted!');
     } catch (error) {
@@ -257,7 +297,6 @@ const MaintenanceReporter = () => {
     }
   };
 
-  // Utility for display
   const formatFileSize = (bytes) => {
     if (!bytes) return '0 Bytes';
     const k = 1024;
@@ -273,7 +312,7 @@ const MaintenanceReporter = () => {
   const selectedCategory = categories.find(cat => cat.id === currentReport.category);
   const selectedUrgency = urgencyLevels[currentReport.urgency];
 
-  // UI
+  // --- RENDER ---
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
       {/* Header */}
@@ -343,7 +382,6 @@ const MaintenanceReporter = () => {
       </div>
 
       {showForm ? (
-        // Enhanced Report Form
         <div className="bg-white/10 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 overflow-hidden">
           <div className="bg-gradient-to-r from-blue-600 to-purple-600 p-8">
             <h2 className="text-3xl font-bold text-white mb-2">Submit New Request</h2>
@@ -351,6 +389,23 @@ const MaintenanceReporter = () => {
           </div>
           <div className="p-8">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+              {/* Property Picker */}
+              <div className="lg:col-span-2">
+                <label className="block text-white font-semibold mb-3">Property *</label>
+                <select
+                  value={currentReport.property_id}
+                  onChange={e => handleInputChange('property_id', e.target.value)}
+                  className="w-full px-6 py-4 bg-white/10 backdrop-blur border border-white/20 rounded-xl text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300"
+                  required
+                >
+                  <option value="" disabled>Select your property...</option>
+                  {properties.map((property) => (
+                    <option key={property.id} value={property.id}>
+                      {property.name} - {property.address}
+                    </option>
+                  ))}
+                </select>
+              </div>
               {/* Title */}
               <div className="lg:col-span-2">
                 <label className="block text-white font-semibold mb-3">What's the issue? *</label>
@@ -563,7 +618,6 @@ const MaintenanceReporter = () => {
                 className="hidden"
               />
             </div>
-            {/* File Preview */}
             {(currentReport.photos.length > 0 || currentReport.videos.length > 0) && (
               <div className="mb-8">
                 <h3 className="text-xl font-bold text-white mb-6 flex items-center">
@@ -640,7 +694,6 @@ const MaintenanceReporter = () => {
                 )}
               </div>
             )}
-            {/* Submit Button */}
             <div className="flex justify-end">
               <button
                 onClick={submitReport}
