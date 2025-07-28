@@ -198,7 +198,8 @@ const MaintenanceReporter = () => {
         location: currentReport.location,
         urgency: currentReport.urgency,
         coordinates: currentReport.coordinates,
-        address: currentReport.address
+        address: currentReport.address,
+        created_by: user.id
       });
 
       // 2) Upload files & save attachments
