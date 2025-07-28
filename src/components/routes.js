@@ -34,7 +34,7 @@ export default function AppRoutes({ session, role }) {
         path="/dashboard"
         element={
           <ProtectedRoute session={session} role={role} allowedRole="landlord">
-            <LandlordDashboard />
+            <LandlordDashboard/>
           </ProtectedRoute>
         }
       />
