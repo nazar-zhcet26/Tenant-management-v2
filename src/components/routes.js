@@ -14,20 +14,16 @@ export default function AppRoutes({ session, role }) {
   return (
     <Routes>
       {/* Public */}
-      <Route path="/"               element={<LandingPage />} />
-      <Route path="/login"          element={<Login />} />
-      <Route path="/signup"         element={<Signup />} />
-      <Route path="/check-your-email" element={<CheckYourEmail />} />
+      <Route path="/"                   element={<LandingPage />} />
+      <Route path="/login"              element={<Login />} />
+      <Route path="/signup"             element={<Signup />} />
+      <Route path="/check-your-email"   element={<CheckYourEmail />} />
 
       {/* Tenant-only */}
       <Route
         path="/report"
         element={
-          <ProtectedRoute
-            session={session}
-            role={role}
-            allowedRole="tenant"
-          >
+          <ProtectedRoute session={session} role={role} allowedRole="tenant">
             <MaintenanceReporter />
           </ProtectedRoute>
         }
@@ -37,11 +33,7 @@ export default function AppRoutes({ session, role }) {
       <Route
         path="/dashboard"
         element={
-          <ProtectedRoute
-            session={session}
-            role={role}
-            allowedRole="landlord"
-          >
+          <ProtectedRoute session={session} role={role} allowedRole="landlord">
             <LandlordDashboard />
           </ProtectedRoute>
         }
@@ -52,4 +44,3 @@ export default function AppRoutes({ session, role }) {
     </Routes>
   );
 }
-
