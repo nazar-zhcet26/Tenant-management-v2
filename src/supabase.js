@@ -50,7 +50,30 @@ export const maintenanceAPI = {
 
     return { path: data.path, url: publicUrl };
   },
+//new part starts
+  / 1. After saving the report, log the result:
+console.log('Saved report:', saved);
 
+// 2. Before each attachment insert, log the user and report ID:
+for (let photo of currentReport.photos) {
+  console.log('About to save attachment with:', {
+    report_id: saved.id,
+    file_name: photo.name,
+    user_id: user.id
+  });
+
+  const { path, url } = await maintenanceAPI.uploadFile(photo.file, saved.id);
+  const att = await maintenanceAPI.saveAttachment({
+    report_id: saved.id,
+    file_name: photo.name,
+    file_path: path,
+    file_type: 'image',
+    file_size: photo.size,
+    duration: null
+  });
+  attachments.push({ ...att, url });
+}
+//new part ends
   async saveAttachment(attachmentData) {
     const { data, error } = await supabase
       .from('attachments')
