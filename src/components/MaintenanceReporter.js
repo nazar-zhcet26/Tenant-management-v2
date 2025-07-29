@@ -238,7 +238,8 @@ const MaintenanceReporter = () => {
         created_by: user.id
       });
 
-      // 2) Upload files & save attachments
+       
+     /* // 2) Upload files & save attachments
       const attachments = [];
       for (let photo of currentReport.photos) {
         const { path, url } = await maintenanceAPI.uploadFile(photo.file, saved.id);
@@ -264,7 +265,48 @@ const MaintenanceReporter = () => {
         });
         attachments.push({ ...att, url });
       }
+*/
+      const attachments = [];
 
+// PHOTOS
+for (let photo of currentReport.photos) {
+  console.log('About to save attachment with:', {
+    report_id: saved.id,
+    file_name: photo.name,
+    user_id: user.id
+  });
+
+  const { path, url } = await maintenanceAPI.uploadFile(photo.file, saved.id);
+  const att = await maintenanceAPI.saveAttachment({
+    report_id: saved.id,
+    file_name: photo.name,
+    file_path: path,
+    file_type: 'image',
+    file_size: photo.size,
+    duration: null
+  });
+  attachments.push({ ...att, url });
+}
+
+// VIDEOS
+for (let video of currentReport.videos) {
+  console.log('About to save attachment with:', {
+    report_id: saved.id,
+    file_name: video.name,
+    user_id: user.id
+  });
+
+  const { path, url } = await maintenanceAPI.uploadFile(video.file, saved.id);
+  const att = await maintenanceAPI.saveAttachment({
+    report_id: saved.id,
+    file_name: video.name,
+    file_path: path,
+    file_type: 'video',
+    file_size: video.size,
+    duration: video.duration
+  });
+  attachments.push({ ...att, url });
+}
       setReports(prev => [
         {
           ...saved,
