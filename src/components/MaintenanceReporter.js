@@ -275,6 +275,8 @@ for (let photo of currentReport.photos) {
     file_name: photo.name,
     user_id: user.id
   });
+const { data: sessionData } = await supabase.auth.getSession();
+console.log('Supabase auth session before attachment:', sessionData);
 
   const { path, url } = await maintenanceAPI.uploadFile(photo.file, saved.id);
   const att = await maintenanceAPI.saveAttachment({
