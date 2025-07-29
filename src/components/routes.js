@@ -9,6 +9,7 @@ import CheckYourEmail      from './CheckYourEmail';
 import MaintenanceReporter from './MaintenanceReporter';
 import LandlordDashboard   from './LandlordDashboard';
 import ProtectedRoute      from './ProtectedRoute';
+import TenantReports       from './TenantReports';
 
 export default function AppRoutes({ session, role }) {
   return (
