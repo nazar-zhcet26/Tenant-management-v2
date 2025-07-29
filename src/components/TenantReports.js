@@ -195,9 +195,13 @@ async function getSignedUrl(att) {
 function AttachmentImage({ att }) {
   const [url, setUrl] = React.useState('');
   React.useEffect(() => {
-    (async () => setUrl(await getSignedUrl(att)))();
+    (async () => {
+      const signed = await getSignedUrl(att);
+      console.log('Attachment signed URL:', signed);
+      setUrl(signed);
+    })();
   }, [att]);
-  if (!url) return <div className="w-28 h-28 bg-gray-100 rounded" />; // Optional: loading placeholder
+  if (!url) return <div className="w-28 h-28 bg-gray-100 rounded" />;
   return (
     <a href={url} target="_blank" rel="noopener noreferrer">
       <img
@@ -210,6 +214,7 @@ function AttachmentImage({ att }) {
     </a>
   );
 }
+
 
 // Shows video with signed URL
 function AttachmentVideo({ att }) {
