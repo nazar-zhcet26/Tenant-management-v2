@@ -76,14 +76,18 @@ const TenantReports = () => {
         fetchReports();
     }, []);
 
-    // Helper to get public URL for an attachment
-    function getPublicUrl(att) {
-        if (att.url) return att.url;
-        if (att.file_path) {
-            return supabase.storage.from('maintenance-files').getPublicUrl(att.file_path).data.publicUrl;
-        }
-        return '';
-    }
+   // Helper to get signed URL for attachment
+async function getSignedUrl(att) {
+  if (att.url && att.url.includes("token=")) return att.url;
+  if (att.file_path) {
+    const { data, error } = await supabase
+      .storage
+      .from('maintenance-files')
+      .createSignedUrl(att.file_path, 60 * 60); // valid for 1 hour
+    return data?.signedUrl || '';
+  }
+  return '';
+}
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 text-white px-4 py-10">
@@ -167,47 +171,20 @@ const TenantReports = () => {
                         <div className="mb-2"><strong>Property:</strong> {modalReport.properties?.name} ({modalReport.properties?.address})</div>
                         <div className="mb-4"><strong>Category:</strong> {getCategory(modalReport.category).name}</div>
                         {/* Attachments */}
-                        {modalReport.attachments && modalReport.attachments.length > 0 && (
-                            <div className="mb-3">
-                                <h3 className="font-semibold mb-1">Attachments</h3>
-                                <div className="flex flex-wrap gap-3">
-                                    {modalReport.attachments.map(att =>
-                                        att.file_type === 'image' ? (
-                                            <a
-                                                key={att.id}
-                                                href={getPublicUrl(att)}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="block border rounded shadow hover:shadow-lg transition"
-                                            >
-                                                <img
-                                                    src={getPublicUrl(att)}
-                                                    alt={att.file_name}
-                                                    className="w-28 h-28 object-cover rounded"
-                                                    onError={e => { e.target.src = 'https://via.placeholder.com/112'; }}
-                                                />
-                                                <div className="text-xs mt-1 text-center">{att.file_name}</div>
-                                            </a>
-                                        ) : (
-                                            <a
-                                                key={att.id}
-                                                href={getPublicUrl(att)}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="block border rounded shadow hover:shadow-lg transition"
-                                            >
-                                                <video
-                                                    src={getPublicUrl(att)}
-                                                    controls
-                                                    className="w-28 h-28 object-cover rounded"
-                                                />
-                                                <div className="text-xs mt-1 text-center">{att.file_name}</div>
-                                            </a>
-                                        )
-                                    )}
-                                </div>
-                            </div>
-                        )}
+                        {/* Attachments */}
+{modalReport.attachments && modalReport.attachments.length > 0 && (
+  <div className="mb-3">
+    <h3 className="font-semibold mb-1">Attachments</h3>
+    <div className="flex flex-wrap gap-3">
+      {modalReport.attachments.map(att =>
+        att.file_type === 'image'
+          ? <AttachmentImage key={att.id} att={att} />
+          : <AttachmentVideo key={att.id} att={att} />
+      )}
+    </div>
+  </div>
+)}
+
                     </div>
                 </div>
             )}
