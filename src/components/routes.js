@@ -29,7 +29,14 @@ export default function AppRoutes({ session, role }) {
           </ProtectedRoute>
         }
       />
-
+     <Route
+       path="/my-reports"
+       element={
+         <ProtectedRoute session={session} role={role} allowedRole="tenant">
+           <TenantReports />
+        </ProtectedRoute>
+  }
+/>
       {/* Landlord-only */}
       <Route
         path="/dashboard"
