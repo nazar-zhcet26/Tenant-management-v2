@@ -191,6 +191,17 @@ async function getSignedUrl(att) {
         </div>
     );
 };
+async function getSignedUrl(att) {
+  if (att.url && att.url.includes("token=")) return att.url;
+  if (att.file_path) {
+    const { data, error } = await supabase
+      .storage
+      .from('maintenance-files')
+      .createSignedUrl(att.file_path, 60 * 60); // valid for 1 hour
+    return data?.signedUrl || '';
+  }
+  return '';
+}
 // Shows image with signed URL
 function AttachmentImage({ att }) {
   const [url, setUrl] = React.useState('');
