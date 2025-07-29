@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { maintenanceAPI } from '../supabase';
 import { supabase } from '../supabase';
+import { useNavigate } from 'react-router-dom';
 import {
   Camera, Upload, AlertCircle, CheckCircle, MapPin, Home, Shield, Zap, Star,
   Send, FileImage, FileVideo, X, Plus, ChevronRight, Calendar, User
@@ -27,6 +28,7 @@ const urgencyLevels = {
 };
 
 const MaintenanceReporter = () => {
+  const navigate = useNavigate();
   const [reports, setReports] = useState([]);
   const [properties, setProperties] = useState([]); // NEW
   const [currentReport, setCurrentReport] = useState({
@@ -407,7 +409,7 @@ for (let video of currentReport.videos) {
             {showForm && <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>}
           </button>
           <button
-            onClick={() => setShowForm(false)}
+            onClick={() => navigate("/my-reports")}
             className={`px-8 py-4 rounded-xl font-semibold transition-all duration-300 flex items-center space-x-3 ${
               !showForm
                 ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg shadow-blue-500/25'
