@@ -191,6 +191,45 @@ async function getSignedUrl(att) {
         </div>
     );
 };
+// Shows image with signed URL
+function AttachmentImage({ att }) {
+  const [url, setUrl] = React.useState('');
+  React.useEffect(() => {
+    (async () => setUrl(await getSignedUrl(att)))();
+  }, [att]);
+  if (!url) return <div className="w-28 h-28 bg-gray-100 rounded" />; // Optional: loading placeholder
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer">
+      <img
+        src={url}
+        alt={att.file_name}
+        className="w-28 h-28 object-cover rounded"
+        onError={e => { e.target.src = 'https://via.placeholder.com/112'; }}
+      />
+      <div className="text-xs mt-1 text-center">{att.file_name}</div>
+    </a>
+  );
+}
+
+// Shows video with signed URL
+function AttachmentVideo({ att }) {
+  const [url, setUrl] = React.useState('');
+  React.useEffect(() => {
+    (async () => setUrl(await getSignedUrl(att)))();
+  }, [att]);
+  if (!url) return <div className="w-28 h-28 bg-gray-100 rounded" />; // Optional: loading placeholder
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer">
+      <video
+        src={url}
+        controls
+        className="w-28 h-28 object-cover rounded"
+      />
+      <div className="text-xs mt-1 text-center">{att.file_name}</div>
+    </a>
+  );
+}
+
 
 export default TenantReports;
 
