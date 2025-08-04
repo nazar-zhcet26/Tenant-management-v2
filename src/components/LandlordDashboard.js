@@ -145,6 +145,7 @@ const LandlordDashboard = () => {
                                 <ul className="space-y-3">
                                     {reports[property.id].map((report) => (
                                         console.log('Tenant profile:', report.profiles);
+                                        return (
                                         <li
                                             key={report.id}
                                             className="p-4 rounded-lg bg-slate-700 border border-slate-500 hover:shadow-lg transition cursor-pointer"
@@ -164,6 +165,7 @@ const LandlordDashboard = () => {
                                                 </div>
                                             </div>
                                         </li>
+                                        );
                                     ))}
                                 </ul>
                             ) : (
