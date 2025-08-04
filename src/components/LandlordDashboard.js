@@ -143,27 +143,30 @@ const LandlordDashboard = () => {
 
                             {reports[property.id]?.length > 0 ? (
                                 <ul className="space-y-3">
-                                    {reports[property.id].map((report) => (
-                                        <li
-                                            key={report.id}
-                                            className="p-4 rounded-lg bg-slate-700 border border-slate-500 hover:shadow-lg transition cursor-pointer"
-                                            onClick={() => openModal(report)}
-                                        >
-                                            <div className="flex justify-between items-center">
-                                                <div>
-                                                    <p className="text-lg font-semibold">{report.category || report.title}</p>
-                                                    <p className="text-sm text-gray-400">Tenant: {report.profiles?.full_name || 'Unknown Tenant'}</p>
-                                                    <p className="text-sm text-gray-400">{report.description}</p>
-                                                    <p className="text-xs text-gray-500 mt-1">
-                                                        {new Date(report.created_at).toLocaleString()}
-                                                    </p>
+                                    {reports[property.id].map((report) => {
+                                        console.log('Tenant profile:', report.profiles);
+                                        return (
+                                            <li
+                                                key={report.id}
+                                                className="p-4 rounded-lg bg-slate-700 border border-slate-500 hover:shadow-lg transition cursor-pointer"
+                                                onClick={() => openModal(report)}
+                                            >
+                                                <div className="flex justify-between items-center">
+                                                    <div>
+                                                        <p className="text-lg font-semibold">{report.category || report.title}</p>
+                                                        <p className="text-sm text-gray-400">Tenant: {report.profiles?.full_name || 'Unknown Tenant'}</p>
+                                                        <p className="text-sm text-gray-400">{report.description}</p>
+                                                        <p className="text-xs text-gray-500 mt-1">
+                                                            {new Date(report.created_at).toLocaleString()}
+                                                        </p>
+                                                    </div>
+                                                    <div className={`text-sm px-3 py-1 rounded-full ${statusLabels[report.status]?.color || 'bg-gray-500'} text-white`}>
+                                                        {statusLabels[report.status]?.label || report.status}
+                                                    </div>
                                                 </div>
-                                                <div className={`text-sm px-3 py-1 rounded-full ${statusLabels[report.status]?.color || 'bg-gray-500'} text-white`}>
-                                                    {statusLabels[report.status]?.label || report.status}
-                                                </div>
-                                            </div>
-                                        </li>
-                                    ))}
+                                            </li>
+                                        );
+                                    })}
                                 </ul>
                             ) : (
                                 <div className="flex items-center gap-2 text-gray-400">
