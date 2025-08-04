@@ -55,7 +55,7 @@ const LandlordDashboard = () => {
             for (const prop of landlordProps) {
                 const { data: propReports, error: reportError } = await supabase
                     .from('maintenance_reports')
-                    .select('*, profiles:created_by(full_name, email), attachments(*)')
+                    .select('*, profiles!maintenance_reports_created_by_fkey(full_name, email), attachments(*)')
                     .eq('property_id', prop.id)
                     .order('created_at', { ascending: false });
 
@@ -151,7 +151,8 @@ const LandlordDashboard = () => {
                                         >
                                             <div className="flex justify-between items-center">
                                                 <div>
-                                                    <p className="text-lg font-semibold">{report.title}</p>
+                                                    <p className="text-lg font-semibold">{report.category || report.title}</p>
+                                                    <p className="text-sm text-gray-400">Tenant: {report.profiles?.full_name || 'Unknown Tenant'}</p>
                                                     <p className="text-sm text-gray-400">{report.description}</p>
                                                     <p className="text-xs text-gray-500 mt-1">
                                                         {new Date(report.created_at).toLocaleString()}
@@ -303,4 +304,3 @@ function AttachmentVideo({ att }) {
         </a>
     );
 }
-
