@@ -208,6 +208,8 @@ async function notifyReportSubmission(data) {
     return;
   }
   try {
+    console.log('Sending webhook to:', webhookUrl);
+    console.log('Payload:', data);
     const response = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
