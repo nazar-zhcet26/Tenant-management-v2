@@ -199,6 +199,28 @@ const MaintenanceReporter = () => {
     else if (e.type === "dragleave") setDragActive(false);
   };
 
+
+  // Helper function to send webhook
+async function notifyReportSubmission(data) {
+  const webhookUrl = process.env.REACT_APP_N8N_REPORT_SUBMISSION_WEBHOOK;
+  if (!webhookUrl) {
+    console.warn('N8N webhook URL not configured.');
+    return;
+  }
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      console.error('Failed to notify n8n:', response.statusText);
+    }
+  } catch (error) {
+    console.error('Error notifying n8n:', error);
+  }
+};
+
   const handleDrop = (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -212,136 +234,144 @@ const MaintenanceReporter = () => {
 
   // 🟢 ADD property_id and created_by when submitting
   const submitReport = async () => {
-    if (
-      !currentReport.property_id ||
-      !currentReport.title ||
-      !currentReport.description ||
-      !currentReport.category
-    ) {
-      alert('Please fill in all required fields (including property).');
-      return;
+  if (
+    !currentReport.property_id ||
+    !currentReport.title ||
+    !currentReport.description ||
+    !currentReport.category
+  ) {
+    alert('Please fill in all required fields (including property).');
+    return;
+  }
+  setIsSubmitting(true);
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    if (error) throw error;
+    const user = data.user;
+    if (!user) throw new Error('No authenticated user');
+
+    // Save the report
+    const saved = await maintenanceAPI.submitReport({
+      property_id: currentReport.property_id,
+      title: currentReport.title,
+      description: currentReport.description,
+      category: currentReport.category,
+      location: currentReport.location,
+      urgency: currentReport.urgency,
+      coordinates: currentReport.coordinates,
+      address: currentReport.address,
+      created_by: user.id
+    });
+
+    // Upload attachments
+    const attachments = [];
+    for (let photo of currentReport.photos) {
+      const { path, url } = await maintenanceAPI.uploadFile(photo.file, saved.id);
+      const att = await maintenanceAPI.saveAttachment({
+        report_id: saved.id,
+        file_name: photo.name,
+        file_path: path,
+        file_type: 'image',
+        file_size: photo.size,
+        duration: null
+      });
+      attachments.push({ ...att, url });
     }
-    setIsSubmitting(true);
+    for (let video of currentReport.videos) {
+      const { path, url } = await maintenanceAPI.uploadFile(video.file, saved.id);
+      const att = await maintenanceAPI.saveAttachment({
+        report_id: saved.id,
+        file_name: video.name,
+        file_path: path,
+        file_type: 'video',
+        file_size: video.size,
+        duration: video.duration
+      });
+      attachments.push({ ...att, url });
+    }
+
+    setReports(prev => [
+      {
+        ...saved,
+        attachments,
+        dateSubmitted: saved.created_at
+      },
+      ...prev
+    ]);
+
+    setCurrentReport({
+      id: null,
+      property_id: '',
+      title: '',
+      description: '',
+      category: '',
+      location: '',
+      urgency: 'medium',
+      photos: [],
+      videos: [],
+      status: 'pending',
+      dateSubmitted: null,
+      coordinates: null,
+      address: ''
+    });
+
+    alert('✅ Maintenance request submitted!');
+
+    // Fetch landlord info based on property_id
+    let landlord_email = '';
+    let landlord_name = '';
+
     try {
-      const { data, error } = await supabase.auth.getUser();
-      if (error) throw error;
-      const user = data.user;
-      if (!user) throw new Error('No authenticated user');
+      const { data: propertyData, error: propertyError } = await supabase
+        .from('properties')
+        .select('owner_id')
+        .eq('id', currentReport.property_id)
+        .single();
 
-      const saved = await maintenanceAPI.submitReport({
-        property_id: currentReport.property_id,
-        title: currentReport.title,
-        description: currentReport.description,
-        category: currentReport.category,
-        location: currentReport.location,
-        urgency: currentReport.urgency,
-        coordinates: currentReport.coordinates,
-        address: currentReport.address,
-        created_by: user.id
-      });
+      if (propertyError) throw propertyError;
 
-       
-     /* // 2) Upload files & save attachments
-      const attachments = [];
-      for (let photo of currentReport.photos) {
-        const { path, url } = await maintenanceAPI.uploadFile(photo.file, saved.id);
-        const att = await maintenanceAPI.saveAttachment({
-          report_id: saved.id,
-          file_name: photo.name,
-          file_path: path,
-          file_type: 'image',
-          file_size: photo.size,
-          duration: null
-        });
-        attachments.push({ ...att, url });
+      if (propertyData?.owner_id) {
+        const { data: landlordData, error: landlordError } = await supabase
+          .from('profiles')
+          .select('full_name, email')
+          .eq('id', propertyData.owner_id)
+          .single();
+
+        if (landlordError) throw landlordError;
+
+        landlord_email = landlordData?.email || '';
+        landlord_name = landlordData?.full_name || '';
       }
-      for (let video of currentReport.videos) {
-        const { path, url } = await maintenanceAPI.uploadFile(video.file, saved.id);
-        const att = await maintenanceAPI.saveAttachment({
-          report_id: saved.id,
-          file_name: video.name,
-          file_path: path,
-          file_type: 'video',
-          file_size: video.size,
-          duration: video.duration
-        });
-        attachments.push({ ...att, url });
-      }
-*/
-      const attachments = [];
-
-// PHOTOS
-for (let photo of currentReport.photos) {
-  console.log('About to save attachment with:', {
-    report_id: saved.id,
-    file_name: photo.name,
-    user_id: user.id
-  });
-const { data: sessionData } = await supabase.auth.getSession();
-console.log('Supabase auth session before attachment:', sessionData);
-
-  const { path, url } = await maintenanceAPI.uploadFile(photo.file, saved.id);
-  const att = await maintenanceAPI.saveAttachment({
-    report_id: saved.id,
-    file_name: photo.name,
-    file_path: path,
-    file_type: 'image',
-    file_size: photo.size,
-    duration: null
-  });
-  attachments.push({ ...att, url });
-}
-
-// VIDEOS
-for (let video of currentReport.videos) {
-  console.log('About to save attachment with:', {
-    report_id: saved.id,
-    file_name: video.name,
-    user_id: user.id
-  });
-
-  const { path, url } = await maintenanceAPI.uploadFile(video.file, saved.id);
-  const att = await maintenanceAPI.saveAttachment({
-    report_id: saved.id,
-    file_name: video.name,
-    file_path: path,
-    file_type: 'video',
-    file_size: video.size,
-    duration: video.duration
-  });
-  attachments.push({ ...att, url });
-}
-      setReports(prev => [
-        {
-          ...saved,
-          attachments,
-          dateSubmitted: saved.created_at
-        },
-        ...prev
-      ]);
-      setCurrentReport({
-        id: null,
-        property_id: '',
-        title: '',
-        description: '',
-        category: '',
-        location: '',
-        urgency: 'medium',
-        photos: [],
-        videos: [],
-        status: 'pending',
-        dateSubmitted: null,
-        coordinates: null,
-        address: ''
-      });
-      alert('✅ Maintenance request submitted!');
     } catch (error) {
-      console.error('Submit error:', error);
-      alert(error.message);
-    } finally {
-      setIsSubmitting(false);
+      console.error('Error fetching landlord info:', error.message);
     }
-  };
+
+    // Build webhook payload with updated URLs
+    const payload = {
+      report_id: saved.id,
+      property_id: currentReport.property_id,
+      property_name: properties.find(p => p.id === currentReport.property_id)?.name || '',
+      tenant_email: user.email,
+      tenant_name: user.user_metadata?.full_name || 'Tenant',
+      landlord_email,
+      landlord_name,
+      report_category: currentReport.category,
+      report_title: currentReport.title,
+      report_url: `${window.location.origin}/my-reports`,
+      landlord_portal_url: `${window.location.origin}/dashboard`
+    };
+
+    // Call webhook
+    await notifyReportSubmission(payload);
+
+  } catch (error) {
+    console.error('Submit error:', error);
+    alert(error.message);
+  } finally {
+    setIsSubmitting(false);
+  }
+};
+
 
   const formatFileSize = (bytes) => {
     if (!bytes) return '0 Bytes';
