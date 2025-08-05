@@ -215,6 +215,7 @@ async function notifyReportSubmission(data) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
+    console.log('Webhook response status:', response.status);
     if (!response.ok) {
       console.error('Failed to notify n8n:', response.statusText);
     }
