@@ -5,7 +5,9 @@ import { Home, AlertCircle, ClipboardList, X } from 'lucide-react';
 
 const statusLabels = {
   pending: { label: 'Pending', color: 'bg-yellow-600' },
-  approved: { label: 'Approved', color: 'bg-green-700' },
+  working: { label: 'Working', color: 'bg-blue-500' },
+  fixed: { label: 'Fixed', color: 'bg-green-600' },
+  approved: { label: 'Approved', color: 'bg-green-600' },
 };
 
 const LandlordDashboard = () => {
@@ -34,7 +36,7 @@ const LandlordDashboard = () => {
       const currentUser = session.user;
       setUser(currentUser);
 
-      // Fetch properties owned by landlord
+      // Fetch landlord's properties
       const { data: landlordProps, error: propError } = await supabase
         .from('properties')
         .select('*')
@@ -47,10 +49,9 @@ const LandlordDashboard = () => {
       }
       setProperties(landlordProps);
 
-      // Fetch maintenance reports for each property
+      // Fetch maintenance reports + tenant profiles + attachments
       const allReports = {};
       for (const prop of landlordProps) {
-        // Fetch reports WITHOUT tenant join
         const { data: propReports, error: reportError } = await supabase
           .from('maintenance_reports')
           .select('*, attachments(*)')
@@ -67,7 +68,7 @@ const LandlordDashboard = () => {
           continue;
         }
 
-        // Fetch tenant profiles separately
+        // Get unique tenant IDs from reports
         const tenantIds = [...new Set(propReports.map((r) => r.created_by))];
         const { data: tenantProfiles, error: tenantError } = await supabase
           .from('profiles')
@@ -78,7 +79,7 @@ const LandlordDashboard = () => {
           console.error('Error fetching tenant profiles', tenantError);
         }
 
-        // Map tenant profiles by id for quick lookup
+        // Map tenant profiles by ID for quick lookup
         const tenantMap = {};
         (tenantProfiles || []).forEach((tp) => {
           tenantMap[tp.id] = tp;
@@ -95,6 +96,7 @@ const LandlordDashboard = () => {
 
         allReports[prop.id] = reportsWithTenant;
       }
+
       setReports(allReports);
       setLoading(false);
     };
@@ -115,30 +117,83 @@ const LandlordDashboard = () => {
   };
 
   const handleStatusUpdate = async () => {
-    if (!modalReport) return;
+    if (!modalReport) {
+      console.log('No report selected for approval.');
+      return;
+    }
+
     setStatusUpdating(true);
+    console.log('Starting status update for report id:', modalReport.id);
+
     try {
+      // Update status to 'approved' in Supabase
       const { error } = await supabase
         .from('maintenance_reports')
         .update({ status: 'approved' })
         .eq('id', modalReport.id);
-      if (error) throw error;
 
-      // Update local modal and reports state
+      if (error) {
+        console.error('Error updating report status:', error);
+        throw error;
+      }
+      console.log('Report status updated to approved in Supabase.');
+
+      // Update local UI state to reflect new status
       setModalReport({ ...modalReport, status: 'approved' });
-      setReports((prev) => {
+      setReports(prev => {
         const updated = { ...prev };
         for (const propId in updated) {
-          updated[propId] = updated[propId].map((r) =>
+          updated[propId] = updated[propId].map(r =>
             r.id === modalReport.id ? { ...r, status: 'approved' } : r
           );
         }
         return updated;
       });
+      console.log('Local state updated with approved status.');
+
+      // Find property name by matching property_id from modalReport
+      const property = properties.find(p => p.id === modalReport.property_id);
+      const property_name = property ? property.name : 'Unknown Property';
+
+      // Build webhook payload with mandatory landlord email, name and property name
+      const payload = {
+        report_id: modalReport.id,
+        tenant_email: modalTenant?.email,
+        tenant_name: modalTenant?.full_name,
+        landlord_email: user.email,
+        landlord_name: user.user_metadata?.full_name || user.email || 'Landlord',
+        property_name,
+        report_title: modalReport.title,
+        report_category: modalReport.category,
+        report_url: `${window.location.origin}/my-reports`,
+      };
+
+      console.log('Sending webhook with payload:', payload);
+
+      // Send webhook POST request
+      const webhookUrl = process.env.REACT_APP_N8N_LANDLORD_APPROVAL_WEBHOOK;
+      if (webhookUrl) {
+        const response = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          console.error('Webhook call failed with status:', response.status);
+          throw new Error(`Webhook call failed with status ${response.status}`);
+        }
+
+        console.log('Webhook sent successfully.');
+      } else {
+        console.warn('Webhook URL not configured.');
+      }
     } catch (e) {
+      console.error('Failed to update status:', e);
       alert('Failed to update status: ' + e.message);
     } finally {
       setStatusUpdating(false);
+      console.log('Status update process completed.');
     }
   };
 
@@ -286,7 +341,7 @@ const LandlordDashboard = () => {
 
 export default LandlordDashboard;
 
-// Helper attachment components
+// Attachment helper components
 function AttachmentImage({ att }) {
   const [url, setUrl] = React.useState('');
   React.useEffect(() => {
