@@ -3,12 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabase';
 import { Home, AlertCircle, ClipboardList, X } from 'lucide-react';
 
-const statusOrder = ['pending', 'working', 'fixed'];
+const statusOrder = ['pending', 'working', 'fixed', 'approved'];
 const statusLabels = {
     pending: { label: 'Pending', color: 'bg-yellow-600' },
     working: { label: 'Working', color: 'bg-blue-500' },
     fixed: { label: 'Fixed', color: 'bg-green-600' },
-    approved: { label: 'Approved', color: 'bg-green-600' }, // new status
+    approved: { label: 'Approved', color: 'bg-green-700' },
 };
 
 const LandlordDashboard = () => {
@@ -26,7 +26,7 @@ const LandlordDashboard = () => {
         const fetchUserData = async () => {
             const {
                 data: { session },
-                error
+                error,
             } = await supabase.auth.getSession();
 
             if (error || !session) {
@@ -37,7 +37,7 @@ const LandlordDashboard = () => {
             const currentUser = session.user;
             setUser(currentUser);
 
-            // Fetch properties owned by this landlord (owner_id)
+            // Fetch properties owned by this landlord
             const { data: landlordProps, error: propError } = await supabase
                 .from('properties')
                 .select('*')
@@ -51,7 +51,7 @@ const LandlordDashboard = () => {
 
             setProperties(landlordProps);
 
-            // For each property, fetch its maintenance reports (with tenant info & attachments)
+            // Fetch maintenance reports for each property
             const allReports = {};
             for (const prop of landlordProps) {
                 const { data: propReports, error: reportError } = await supabase
@@ -95,39 +95,17 @@ const LandlordDashboard = () => {
                 .eq('id', modalReport.id);
             if (error) throw error;
 
+            // Update modal and reports state locally
             setModalReport({ ...modalReport, status: 'approved' });
-            setReports(prev => {
+            setReports((prev) => {
                 const updated = { ...prev };
                 for (const propId in updated) {
-                    updated[propId] = updated[propId].map(r =>
+                    updated[propId] = updated[propId].map((r) =>
                         r.id === modalReport.id ? { ...r, status: 'approved' } : r
                     );
                 }
                 return updated;
             });
-
-            // Build payload for webhook
-            const payload = {
-                report_id: modalReport.id,
-                tenant_email: modalTenant?.email,
-                tenant_name: modalTenant?.full_name,
-                landlord_name: user?.user_metadata?.full_name || user?.email || 'Landlord',
-                report_title: modalReport.title,
-                report_category: modalReport.category,
-                report_url: `${window.location.origin}/my-reports`,
-            };
-
-            // Call webhook to notify tenant
-            const webhookUrl = process.env.REACT_APP_N8N_LANDLORD_APPROVAL_WEBHOOK;
-            if (webhookUrl) {
-                await fetch(webhookUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                });
-            } else {
-                console.warn('Landlord approval webhook URL not configured.');
-            }
         } catch (e) {
             alert('Failed to update status: ' + e.message);
         } finally {
@@ -182,7 +160,10 @@ const LandlordDashboard = () => {
                                                         {new Date(report.created_at).toLocaleString()}
                                                     </p>
                                                 </div>
-                                                <div className={`text-sm px-3 py-1 rounded-full ${statusLabels[report.status]?.color || 'bg-gray-500'} text-white`}>
+                                                <div
+                                                    className={`text-sm px-3 py-1 rounded-full ${statusLabels[report.status]?.color || 'bg-gray-500'
+                                                        } text-white`}
+                                                >
                                                     {statusLabels[report.status]?.label || report.status}
                                                 </div>
                                             </div>
@@ -213,7 +194,10 @@ const LandlordDashboard = () => {
                         <div className="mb-3">
                             <h2 className="text-2xl font-bold mb-2">{modalReport.title}</h2>
                             <div className="flex gap-2 items-center mb-2">
-                                <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${statusLabels[modalReport.status]?.color || 'bg-gray-500'} text-white`}>
+                                <span
+                                    className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${statusLabels[modalReport.status]?.color || 'bg-gray-500'
+                                        } text-white`}
+                                >
                                     {statusLabels[modalReport.status]?.label || modalReport.status}
                                 </span>
                                 <span className="text-xs text-gray-500">{new Date(modalReport.created_at).toLocaleString()}</span>
@@ -236,10 +220,12 @@ const LandlordDashboard = () => {
                             <div className="mb-3">
                                 <h3 className="font-semibold mb-1">Attachments</h3>
                                 <div className="flex flex-wrap gap-3">
-                                    {modalAttachments.map(att =>
-                                        att.file_type === 'image'
-                                            ? <AttachmentImage key={att.id} att={att} />
-                                            : <AttachmentVideo key={att.id} att={att} />
+                                    {modalAttachments.map((att) =>
+                                        att.file_type === 'image' ? (
+                                            <AttachmentImage key={att.id} att={att} />
+                                        ) : (
+                                            <AttachmentVideo key={att.id} att={att} />
+                                        )
                                     )}
                                 </div>
                             </div>
@@ -265,6 +251,7 @@ const LandlordDashboard = () => {
 
 export default LandlordDashboard;
 
+// Attachment helper components (unchanged)
 function AttachmentImage({ att }) {
     const [url, setUrl] = React.useState('');
     React.useEffect(() => {
@@ -280,7 +267,9 @@ function AttachmentImage({ att }) {
                 src={url}
                 alt={att.file_name}
                 className="w-28 h-28 object-cover rounded"
-                onError={e => { e.target.src = 'https://via.placeholder.com/112'; }}
+                onError={(e) => {
+                    e.target.src = 'https://via.placeholder.com/112';
+                }}
             />
             <div className="text-xs mt-1 text-center">{att.file_name}</div>
         </a>
@@ -298,23 +287,18 @@ function AttachmentVideo({ att }) {
     if (!url) return <div className="w-28 h-28 bg-gray-100 rounded" />;
     return (
         <a href={url} target="_blank" rel="noopener noreferrer">
-            <video
-                src={url}
-                controls
-                className="w-28 h-28 object-cover rounded"
-            />
+            <video src={url} controls className="w-28 h-28 object-cover rounded" />
             <div className="text-xs mt-1 text-center">{att.file_name}</div>
         </a>
     );
 }
 
 async function getSignedUrl(att) {
-    if (att.url && att.url.includes("token=")) return att.url;
+    if (att.url && att.url.includes('token=')) return att.url;
     if (att.file_path) {
-        const { data, error } = await supabase
-            .storage
+        const { data, error } = await supabase.storage
             .from('maintenance-files')
-            .createSignedUrl(att.file_path, 60 * 60); // valid for 1 hour
+            .createSignedUrl(att.file_path, 60 * 60);
         return data?.signedUrl || '';
     }
     return '';
