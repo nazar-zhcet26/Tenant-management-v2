@@ -3,11 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabase';
 import { Home, AlertCircle, ClipboardList, X } from 'lucide-react';
 
-const statusOrder = ['pending', 'working', 'fixed', 'approved'];
 const statusLabels = {
     pending: { label: 'Pending', color: 'bg-yellow-600' },
-    working: { label: 'Working', color: 'bg-blue-500' },
-    fixed: { label: 'Fixed', color: 'bg-green-600' },
     approved: { label: 'Approved', color: 'bg-green-700' },
 };
 
@@ -57,10 +54,11 @@ const LandlordDashboard = () => {
                 const { data: propReports, error: reportError } = await supabase
                     .from('maintenance_reports')
                     .select('*, profiles!maintenance_reports_created_by_fkey(full_name, email), attachments(*)')
-                    .eq('property_id', prop.id)
-                    .order('created_at', { ascending: false });
+                    .eq('property_id', prop.id);
 
                 if (!reportError) {
+                    // Sort client side by created_at descending
+                    propReports.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
                     allReports[prop.id] = propReports;
                 }
             }
@@ -106,6 +104,32 @@ const LandlordDashboard = () => {
                 }
                 return updated;
             });
+
+            // Build payload for webhook call
+            const property = properties.find((p) => p.id === modalReport.property_id);
+            const propertyName = property ? property.name : 'Unknown Property';
+
+            const payload = {
+                report_id: modalReport.id,
+                tenant_email: modalTenant?.email,
+                tenant_name: modalTenant?.full_name,
+                landlord_name: user?.user_metadata?.full_name || user?.email || 'Landlord',
+                report_title: modalReport.title,
+                report_category: modalReport.category,
+                report_url: `${window.location.origin}/my-reports`,
+                property_name: propertyName,
+            };
+
+            const webhookUrl = process.env.REACT_APP_N8N_LANDLORD_APPROVAL_WEBHOOK;
+            if (webhookUrl) {
+                await fetch(webhookUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+            } else {
+                console.warn('Landlord approval webhook URL not configured.');
+            }
         } catch (e) {
             alert('Failed to update status: ' + e.message);
         } finally {
