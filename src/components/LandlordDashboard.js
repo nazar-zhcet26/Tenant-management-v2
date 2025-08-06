@@ -1,122 +1,109 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabase';
-import { useUser } from '../hooks/useUser';
-import {
-    CheckCircle,
-    AlertCircle,
-    ChevronRight,
-    User,
-    MapPin,
-    Calendar,
-    FileImage,
-    FileVideo,
-} from 'lucide-react';
+import { Home, AlertCircle, ClipboardList, X } from 'lucide-react';
+
+const statusOrder = ['pending', 'working', 'fixed'];
+const statusLabels = {
+    pending: { label: 'Pending', color: 'bg-yellow-600' },
+    working: { label: 'Working', color: 'bg-blue-500' },
+    fixed: { label: 'Fixed', color: 'bg-green-600' },
+};
 
 const LandlordDashboard = () => {
-    const { user } = useUser();
+    const navigate = useNavigate();
+    const [user, setUser] = useState(null);
     const [properties, setProperties] = useState([]);
     const [reports, setReports] = useState({});
-    const [modalOpen, setModalOpen] = useState(false);
+    const [loading, setLoading] = useState(true);
     const [modalReport, setModalReport] = useState(null);
     const [modalTenant, setModalTenant] = useState(null);
+    const [modalAttachments, setModalAttachments] = useState([]);
     const [statusUpdating, setStatusUpdating] = useState(false);
 
     useEffect(() => {
-        fetchPropertiesAndReports();
-    }, []);
+        const fetchUserData = async () => {
+            const {
+                data: { session },
+                error
+            } = await supabase.auth.getSession();
 
-    const fetchPropertiesAndReports = async () => {
-        try {
-            const { data: propsData, error: propsError } = await supabase
+            if (error || !session) {
+                navigate('/login');
+                return;
+            }
+
+            const currentUser = session.user;
+            setUser(currentUser);
+
+            // Fetch properties owned by this landlord (owner_id)
+            const { data: landlordProps, error: propError } = await supabase
                 .from('properties')
-                .select('id, name, address')
-                .eq('owner_id', user.id);
-            if (propsError) throw propsError;
-            setProperties(propsData || []);
+                .select('*')
+                .eq('owner_id', currentUser.id);
 
-            const newReports = {};
-            for (const prop of propsData) {
-                const { data: repData, error: repError } = await supabase
+            if (propError) {
+                console.error('Error fetching properties:', propError.message);
+                setLoading(false);
+                return;
+            }
+
+            setProperties(landlordProps);
+
+            // For each property, fetch its maintenance reports (with tenant info & attachments)
+            const allReports = {};
+            for (const prop of landlordProps) {
+                const { data: propReports, error: reportError } = await supabase
                     .from('maintenance_reports')
                     .select('*, profiles!maintenance_reports_created_by_fkey(full_name, email), attachments(*)')
                     .eq('property_id', prop.id)
                     .order('created_at', { ascending: false });
-                if (repError) throw repError;
-                newReports[prop.id] = repData || [];
-            }
-            setReports(newReports);
-        } catch (error) {
-            console.error('Error fetching landlord data:', error);
-        }
-    };
 
-    const openReportModal = async (report) => {
+                if (!reportError) {
+                    allReports[prop.id] = propReports;
+                }
+            }
+
+            setReports(allReports);
+            setLoading(false);
+        };
+
+        fetchUserData();
+    }, [navigate]);
+
+    const openModal = (report) => {
         setModalReport(report);
-        setModalOpen(true);
-        try {
-            const { data: tenantData, error: tenantError } = await supabase
-                .from('profiles')
-                .select('full_name, email')
-                .eq('id', report.created_by)
-                .single();
-            if (tenantError) throw tenantError;
-            setModalTenant(tenantData);
-        } catch (error) {
-            console.error('Error fetching tenant data:', error);
-            setModalTenant(null);
-        }
+        setModalTenant(report.profiles);
+        setModalAttachments(report.attachments || []);
     };
 
     const closeModal = () => {
-        setModalOpen(false);
         setModalReport(null);
         setModalTenant(null);
+        setModalAttachments([]);
     };
 
     const handleStatusUpdate = async () => {
         if (!modalReport) return;
         setStatusUpdating(true);
         try {
-            // Update status to 'approved'
+            const currentStatusIdx = statusOrder.indexOf(modalReport.status);
+            const nextStatus = statusOrder[(currentStatusIdx + 1) % statusOrder.length];
             const { error } = await supabase
                 .from('maintenance_reports')
-                .update({ status: 'approved' })
+                .update({ status: nextStatus })
                 .eq('id', modalReport.id);
             if (error) throw error;
-
-            setModalReport({ ...modalReport, status: 'approved' });
-            setReports((prev) => {
+            setModalReport({ ...modalReport, status: nextStatus });
+            setReports(prev => {
                 const updated = { ...prev };
                 for (const propId in updated) {
-                    updated[propId] = updated[propId].map((r) =>
-                        r.id === modalReport.id ? { ...r, status: 'approved' } : r
+                    updated[propId] = updated[propId].map(r =>
+                        r.id === modalReport.id ? { ...r, status: nextStatus } : r
                     );
                 }
                 return updated;
             });
-
-            // Prepare payload for webhook
-            const payload = {
-                report_id: modalReport.id,
-                tenant_email: modalTenant?.email,
-                tenant_name: modalTenant?.full_name,
-                landlord_name: user?.user_metadata?.full_name || user?.email || 'Landlord',
-                report_title: modalReport.title,
-                report_category: modalReport.category,
-                report_url: `${window.location.origin}/my-reports`,
-            };
-
-            // Call webhook for email notification
-            const webhookUrl = process.env.REACT_APP_N8N_LANDLORD_APPROVAL_WEBHOOK;
-            if (webhookUrl) {
-                await fetch(webhookUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                });
-            } else {
-                console.warn('Landlord approval webhook URL not configured.');
-            }
         } catch (e) {
             alert('Failed to update status: ' + e.message);
         } finally {
@@ -124,99 +111,134 @@ const LandlordDashboard = () => {
         }
     };
 
+    if (loading) {
+        return (
+            <div className="min-h-screen flex items-center justify-center text-white">
+                <p>Loading dashboard...</p>
+            </div>
+        );
+    }
+
     return (
-        <div className="p-8 bg-slate-900 min-h-screen text-white">
-            <h1 className="text-4xl font-bold mb-8">Landlord Dashboard</h1>
+        <div className="min-h-screen bg-gradient-to-br from-slate-800 to-slate-900 text-white p-6">
+            <h1 className="text-4xl font-bold mb-6 flex items-center gap-3">
+                <ClipboardList className="w-8 h-8" />
+                Landlord Dashboard
+            </h1>
+
             {properties.length === 0 ? (
-                <div className="bg-white/10 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 p-16 text-center">
-                    <AlertCircle className="h-24 w-24 text-gray-400 mx-auto mb-6" />
-                    <h3 className="text-3xl font-bold text-white mb-4">No Properties Found</h3>
-                    <p className="text-gray-300 text-lg mb-8">
-                        You have no properties registered. Please add properties to get started.
-                    </p>
+                <div className="flex items-center gap-2 text-gray-400">
+                    <AlertCircle className="w-5 h-5" />
+                    <p>You have not added any properties yet.</p>
                 </div>
             ) : (
                 properties.map((property) => (
-                    <div key={property.id} className="mb-10">
-                        <h2 className="text-2xl font-semibold mb-4">{property.name}</h2>
-                        <div>
-                            {reports[property.id]?.length === 0 ? (
-                                <div className="bg-white/10 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 p-8 text-center">
-                                    <AlertCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                                    <p className="text-gray-300">No maintenance reports yet.</p>
-                                </div>
+                    <div key={property.id} className="mb-6 bg-white/10 border border-white/20 rounded-lg">
+                        <div className="p-6">
+                            <div className="flex items-center mb-4">
+                                <Home className="text-blue-400 mr-2" />
+                                <h2 className="text-2xl font-semibold">{property.name}</h2>
+                            </div>
+                            <p className="text-gray-300 mb-4">{property.address}</p>
+
+                            {reports[property.id]?.length > 0 ? (
+                                <ul className="space-y-3">
+                                    {reports[property.id].map((report) => (
+                                        <li
+                                            key={report.id}
+                                            className="p-4 rounded-lg bg-slate-700 border border-slate-500 hover:shadow-lg transition cursor-pointer"
+                                            onClick={() => openModal(report)}
+                                        >
+                                            <div className="flex justify-between items-center">
+                                                <div>
+                                                    <p className="text-lg font-semibold">{report.category || report.title}</p>
+                                                    <p className="text-sm text-gray-400">Tenant: {report.profiles?.full_name || 'Unknown Tenant'}</p>
+                                                    <p className="text-sm text-gray-400">{report.description}</p>
+                                                    <p className="text-xs text-gray-500 mt-1">
+                                                        {new Date(report.created_at).toLocaleString()}
+                                                    </p>
+                                                </div>
+                                                <div className={`text-sm px-3 py-1 rounded-full ${statusLabels[report.status]?.color || 'bg-gray-500'} text-white`}>
+                                                    {statusLabels[report.status]?.label || report.status}
+                                                </div>
+                                            </div>
+                                        </li>
+                                    ))}
+                                </ul>
                             ) : (
-                                reports[property.id].map((report) => (
-                                    <div
-                                        key={report.id}
-                                        className="bg-gray-800 rounded p-4 mb-4 cursor-pointer hover:bg-gray-700"
-                                        onClick={() => openReportModal(report)}
-                                    >
-                                        <div className="flex justify-between items-center">
-                                            <div>
-                                                <h3 className="font-semibold text-lg">{report.title}</h3>
-                                                <p className="text-sm text-gray-300">{report.category}</p>
-                                            </div>
-                                            <div>
-                                                <span
-                                                    className={`inline-block px-3 py-1 rounded-full text-sm ${report.status === 'pending'
-                                                            ? 'bg-yellow-500 text-yellow-900'
-                                                            : report.status === 'approved'
-                                                                ? 'bg-green-500 text-green-900'
-                                                                : 'bg-gray-500 text-gray-300'
-                                                        }`}
-                                                >
-                                                    {report.status}
-                                                </span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))
+                                <div className="flex items-center gap-2 text-gray-400">
+                                    <AlertCircle className="w-5 h-5" />
+                                    <p>No reports submitted for this property.</p>
+                                </div>
                             )}
                         </div>
                     </div>
                 ))
             )}
 
-            {/* Modal */}
-            {modalOpen && modalReport && (
-                <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
-                    <div className="bg-gray-900 rounded-lg max-w-xl w-full p-8 relative">
+            {/* Modal for full report details */}
+            {modalReport && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60">
+                    <div className="relative bg-white text-gray-900 rounded-xl shadow-2xl p-8 max-w-2xl w-full">
                         <button
-                            className="absolute top-4 right-4 text-gray-400 hover:text-white"
+                            className="absolute top-4 right-4 text-gray-400 hover:text-red-600"
                             onClick={closeModal}
+                            aria-label="Close"
                         >
-                            Close
+                            <X className="h-7 w-7" />
                         </button>
-                        <h2 className="text-3xl font-bold mb-4">{modalReport.title}</h2>
-                        <p className="mb-2">
-                            <strong>Category:</strong> {modalReport.category}
-                        </p>
-                        <p className="mb-2">
-                            <strong>Description:</strong> {modalReport.description}
-                        </p>
-                        <p className="mb-2">
-                            <strong>Status:</strong> {modalReport.status}
-                        </p>
-                        {modalTenant && (
-                            <p className="mb-2">
-                                <strong>Tenant:</strong> {modalTenant.full_name} ({modalTenant.email})
-                            </p>
+                        <div className="mb-3">
+                            <h2 className="text-2xl font-bold mb-2">{modalReport.title}</h2>
+                            <div className="flex gap-2 items-center mb-2">
+                                <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${statusLabels[modalReport.status]?.color || 'bg-gray-500'} text-white`}>
+                                    {statusLabels[modalReport.status]?.label || modalReport.status}
+                                </span>
+                                <span className="text-xs text-gray-500">{new Date(modalReport.created_at).toLocaleString()}</span>
+                            </div>
+                            <div className="text-gray-700 mb-2">{modalReport.description}</div>
+                            <div className="mb-2">
+                                <strong>Location:</strong> {modalReport.location || '-'}
+                            </div>
+                            <div className="mb-2">
+                                <strong>Urgency:</strong> {modalReport.urgency || '-'}
+                            </div>
+                            {modalTenant && (
+                                <div className="mb-2">
+                                    <strong>Submitted by:</strong> {modalTenant.full_name} ({modalTenant.email})
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Attachments */}
+                        {modalAttachments.length > 0 && (
+                            <div className="mb-3">
+                                <h3 className="font-semibold mb-1">Attachments</h3>
+                                <div className="flex flex-wrap gap-3">
+                                    {modalAttachments.map(att =>
+                                        att.file_type === 'image'
+                                            ? <AttachmentImage key={att.id} att={att} />
+                                            : <AttachmentVideo key={att.id} att={att} />
+                                    )}
+                                </div>
+                            </div>
                         )}
-                        <button
-                            onClick={handleStatusUpdate}
-                            disabled={statusUpdating || modalReport.status === 'approved'}
-                            className={`mt-6 px-6 py-3 rounded font-semibold text-white ${modalReport.status === 'approved'
-                                    ? 'bg-gray-600 cursor-not-allowed'
-                                    : 'bg-green-600 hover:bg-green-700'
-                                }`}
-                        >
-                            {statusUpdating
-                                ? 'Updating...'
-                                : modalReport.status === 'pending'
-                                    ? 'Approve'
-                                    : 'Update Status'}
-                        </button>
+
+                        {/* Status Change Button */}
+                        <div className="mt-5 flex gap-2">
+                            {modalReport.status !== 'fixed' && (
+                                <button
+                                    onClick={handleStatusUpdate}
+                                    disabled={statusUpdating}
+                                    className="px-6 py-2 bg-blue-700 hover:bg-blue-800 text-white font-semibold rounded-lg transition disabled:opacity-60"
+                                >
+                                    {statusUpdating
+                                        ? 'Updating...'
+                                        : modalReport.status === 'pending'
+                                            ? 'Mark as Working'
+                                            : 'Mark as Fixed'}
+                                </button>
+                            )}
+                        </div>
                     </div>
                 </div>
             )}
@@ -225,3 +247,60 @@ const LandlordDashboard = () => {
 };
 
 export default LandlordDashboard;
+
+// ------- Attachment components and helper -------
+
+async function getSignedUrl(att) {
+    if (att.url && att.url.includes("token=")) return att.url;
+    if (att.file_path) {
+        const { data, error } = await supabase
+            .storage
+            .from('maintenance-files')
+            .createSignedUrl(att.file_path, 60 * 60); // valid for 1 hour
+        return data?.signedUrl || '';
+    }
+    return '';
+}
+
+function AttachmentImage({ att }) {
+    const [url, setUrl] = React.useState('');
+    React.useEffect(() => {
+        (async () => {
+            const signed = await getSignedUrl(att);
+            setUrl(signed);
+        })();
+    }, [att]);
+    if (!url) return <div className="w-28 h-28 bg-gray-100 rounded" />;
+    return (
+        <a href={url} target="_blank" rel="noopener noreferrer">
+            <img
+                src={url}
+                alt={att.file_name}
+                className="w-28 h-28 object-cover rounded"
+                onError={e => { e.target.src = 'https://via.placeholder.com/112'; }}
+            />
+            <div className="text-xs mt-1 text-center">{att.file_name}</div>
+        </a>
+    );
+}
+
+function AttachmentVideo({ att }) {
+    const [url, setUrl] = React.useState('');
+    React.useEffect(() => {
+        (async () => {
+            const signed = await getSignedUrl(att);
+            setUrl(signed);
+        })();
+    }, [att]);
+    if (!url) return <div className="w-28 h-28 bg-gray-100 rounded" />;
+    return (
+        <a href={url} target="_blank" rel="noopener noreferrer">
+            <video
+                src={url}
+                controls
+                className="w-28 h-28 object-cover rounded"
+            />
+            <div className="text-xs mt-1 text-center">{att.file_name}</div>
+        </a>
+    );
+}
