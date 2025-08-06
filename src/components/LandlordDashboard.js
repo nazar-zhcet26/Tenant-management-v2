@@ -8,6 +8,7 @@ const statusLabels = {
     pending: { label: 'Pending', color: 'bg-yellow-600' },
     working: { label: 'Working', color: 'bg-blue-500' },
     fixed: { label: 'Fixed', color: 'bg-green-600' },
+    approved: { label: 'Approved', color: 'bg-green-600' }, // new status
 };
 
 const LandlordDashboard = () => {
@@ -87,23 +88,46 @@ const LandlordDashboard = () => {
         if (!modalReport) return;
         setStatusUpdating(true);
         try {
-            const currentStatusIdx = statusOrder.indexOf(modalReport.status);
-            const nextStatus = statusOrder[(currentStatusIdx + 1) % statusOrder.length];
+            // Update status to 'approved'
             const { error } = await supabase
                 .from('maintenance_reports')
-                .update({ status: nextStatus })
+                .update({ status: 'approved' })
                 .eq('id', modalReport.id);
             if (error) throw error;
-            setModalReport({ ...modalReport, status: nextStatus });
+
+            setModalReport({ ...modalReport, status: 'approved' });
             setReports(prev => {
                 const updated = { ...prev };
                 for (const propId in updated) {
                     updated[propId] = updated[propId].map(r =>
-                        r.id === modalReport.id ? { ...r, status: nextStatus } : r
+                        r.id === modalReport.id ? { ...r, status: 'approved' } : r
                     );
                 }
                 return updated;
             });
+
+            // Build payload for webhook
+            const payload = {
+                report_id: modalReport.id,
+                tenant_email: modalTenant?.email,
+                tenant_name: modalTenant?.full_name,
+                landlord_name: user?.user_metadata?.full_name || user?.email || 'Landlord',
+                report_title: modalReport.title,
+                report_category: modalReport.category,
+                report_url: `${window.location.origin}/my-reports`,
+            };
+
+            // Call webhook to notify tenant
+            const webhookUrl = process.env.REACT_APP_N8N_LANDLORD_APPROVAL_WEBHOOK;
+            if (webhookUrl) {
+                await fetch(webhookUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+            } else {
+                console.warn('Landlord approval webhook URL not configured.');
+            }
         } catch (e) {
             alert('Failed to update status: ' + e.message);
         } finally {
@@ -176,7 +200,6 @@ const LandlordDashboard = () => {
                 ))
             )}
 
-            {/* Modal for full report details */}
             {modalReport && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60">
                     <div className="relative bg-white text-gray-900 rounded-xl shadow-2xl p-8 max-w-2xl w-full">
@@ -209,7 +232,6 @@ const LandlordDashboard = () => {
                             )}
                         </div>
 
-                        {/* Attachments */}
                         {modalAttachments.length > 0 && (
                             <div className="mb-3">
                                 <h3 className="font-semibold mb-1">Attachments</h3>
@@ -223,19 +245,14 @@ const LandlordDashboard = () => {
                             </div>
                         )}
 
-                        {/* Status Change Button */}
                         <div className="mt-5 flex gap-2">
-                            {modalReport.status !== 'fixed' && (
+                            {modalReport.status !== 'approved' && (
                                 <button
                                     onClick={handleStatusUpdate}
                                     disabled={statusUpdating}
                                     className="px-6 py-2 bg-blue-700 hover:bg-blue-800 text-white font-semibold rounded-lg transition disabled:opacity-60"
                                 >
-                                    {statusUpdating
-                                        ? 'Updating...'
-                                        : modalReport.status === 'pending'
-                                            ? 'Mark as Working'
-                                            : 'Mark as Fixed'}
+                                    {statusUpdating ? 'Updating...' : 'Approve'}
                                 </button>
                             )}
                         </div>
@@ -247,20 +264,6 @@ const LandlordDashboard = () => {
 };
 
 export default LandlordDashboard;
-
-// ------- Attachment components and helper -------
-
-async function getSignedUrl(att) {
-    if (att.url && att.url.includes("token=")) return att.url;
-    if (att.file_path) {
-        const { data, error } = await supabase
-            .storage
-            .from('maintenance-files')
-            .createSignedUrl(att.file_path, 60 * 60); // valid for 1 hour
-        return data?.signedUrl || '';
-    }
-    return '';
-}
 
 function AttachmentImage({ att }) {
     const [url, setUrl] = React.useState('');
@@ -303,4 +306,16 @@ function AttachmentVideo({ att }) {
             <div className="text-xs mt-1 text-center">{att.file_name}</div>
         </a>
     );
+}
+
+async function getSignedUrl(att) {
+    if (att.url && att.url.includes("token=")) return att.url;
+    if (att.file_path) {
+        const { data, error } = await supabase
+            .storage
+            .from('maintenance-files')
+            .createSignedUrl(att.file_path, 60 * 60); // valid for 1 hour
+        return data?.signedUrl || '';
+    }
+    return '';
 }
