@@ -45,29 +45,56 @@ const LandlordDashboard = () => {
         setLoading(false);
         return;
       }
-      console.log('Properties fetched:', landlordProps);
       setProperties(landlordProps);
 
       // Fetch maintenance reports for each property
       const allReports = {};
       for (const prop of landlordProps) {
-        console.log('Fetching reports for property:', prop.id);
+        // Fetch reports WITHOUT tenant join
         const { data: propReports, error: reportError } = await supabase
           .from('maintenance_reports')
-          .select('*, profiles!maintenance_reports_created_by_fkey(full_name, email), attachments(*)')
+          .select('*, attachments(*)')
           .eq('property_id', prop.id);
 
         if (reportError) {
           console.error('Error fetching reports for property', prop.id, reportError);
           allReports[prop.id] = [];
-        } else {
-          console.log(`Fetched ${propReports.length} reports for property`, prop.id);
-          // Sort client side by created_at descending
-          propReports.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-          allReports[prop.id] = propReports;
+          continue;
         }
+
+        if (!propReports.length) {
+          allReports[prop.id] = [];
+          continue;
+        }
+
+        // Fetch tenant profiles separately
+        const tenantIds = [...new Set(propReports.map((r) => r.created_by))];
+        const { data: tenantProfiles, error: tenantError } = await supabase
+          .from('profiles')
+          .select('id, full_name, email')
+          .in('id', tenantIds);
+
+        if (tenantError) {
+          console.error('Error fetching tenant profiles', tenantError);
+        }
+
+        // Map tenant profiles by id for quick lookup
+        const tenantMap = {};
+        (tenantProfiles || []).forEach((tp) => {
+          tenantMap[tp.id] = tp;
+        });
+
+        // Attach tenant profiles to reports
+        const reportsWithTenant = propReports.map((r) => ({
+          ...r,
+          tenantProfile: tenantMap[r.created_by] || null,
+        }));
+
+        // Sort descending by created_at
+        reportsWithTenant.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+        allReports[prop.id] = reportsWithTenant;
       }
-      console.log('All reports fetched:', allReports);
       setReports(allReports);
       setLoading(false);
     };
@@ -77,7 +104,7 @@ const LandlordDashboard = () => {
 
   const openModal = (report) => {
     setModalReport(report);
-    setModalTenant(report.profiles);
+    setModalTenant(report.tenantProfile);
     setModalAttachments(report.attachments || []);
   };
 
@@ -91,14 +118,13 @@ const LandlordDashboard = () => {
     if (!modalReport) return;
     setStatusUpdating(true);
     try {
-      // Update status to 'approved'
       const { error } = await supabase
         .from('maintenance_reports')
         .update({ status: 'approved' })
         .eq('id', modalReport.id);
       if (error) throw error;
 
-      // Update modal and reports state locally
+      // Update local modal and reports state
       setModalReport({ ...modalReport, status: 'approved' });
       setReports((prev) => {
         const updated = { ...prev };
@@ -109,9 +135,6 @@ const LandlordDashboard = () => {
         }
         return updated;
       });
-
-      // You can add webhook logic here to notify tenant later
-
     } catch (e) {
       alert('Failed to update status: ' + e.message);
     } finally {
@@ -126,9 +149,6 @@ const LandlordDashboard = () => {
       </div>
     );
   }
-
-  console.log('Reports in state:', reports);
-  console.log('Properties:', properties);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-800 to-slate-900 text-white p-6">
@@ -164,7 +184,7 @@ const LandlordDashboard = () => {
                         <div>
                           <p className="text-lg font-semibold">{report.category || report.title}</p>
                           <p className="text-sm text-gray-400">
-                            Tenant: {report.profiles?.full_name || 'Unknown Tenant'}
+                            Tenant: {report.tenantProfile?.full_name || 'Unknown Tenant'}
                           </p>
                           <p className="text-sm text-gray-400">{report.description}</p>
                           <p className="text-xs text-gray-500 mt-1">
@@ -266,7 +286,7 @@ const LandlordDashboard = () => {
 
 export default LandlordDashboard;
 
-// Attachment helper components (unchanged)
+// Helper attachment components
 function AttachmentImage({ att }) {
   const [url, setUrl] = React.useState('');
   React.useEffect(() => {
