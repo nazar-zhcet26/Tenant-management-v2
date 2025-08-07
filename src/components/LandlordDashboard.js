@@ -172,6 +172,7 @@ const LandlordDashboard = () => {
 
       // Send webhook POST request
       const webhookUrl = process.env.REACT_APP_N8N_LANDLORD_APPROVAL_WEBHOOK;
+      console.log('Webhook URL from env:', webhookUrl);
       if (webhookUrl) {
         const response = await fetch(webhookUrl, {
           method: 'POST',
