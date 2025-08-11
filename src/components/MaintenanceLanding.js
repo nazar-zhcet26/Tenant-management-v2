@@ -9,13 +9,13 @@ export default function MaintenanceLanding() {
             <h1 className="text-4xl font-bold mb-12">Welcome to Maintenance Portal</h1>
             <div className="flex flex-col sm:flex-row gap-8">
                 <button
-                    onClick={() => navigate('/helpdesk-login')}
+                    onClick={() => navigate('/team-login?role=helpdesk')}
                     className="bg-blue-600 hover:bg-blue-700 px-10 py-4 rounded-lg text-xl font-semibold shadow-lg transition"
                 >
                     Helpdesk Login
                 </button>
                 <button
-                    onClick={() => navigate('/contractor-login')}
+                    onClick={() => navigate('/team-login?role=contractor')}
                     className="bg-green-600 hover:bg-green-700 px-10 py-4 rounded-lg text-xl font-semibold shadow-lg transition"
                 >
                     Contractor Login
@@ -24,3 +24,4 @@ export default function MaintenanceLanding() {
         </div>
     );
 }
+
