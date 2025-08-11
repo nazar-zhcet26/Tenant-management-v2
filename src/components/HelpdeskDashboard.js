@@ -2,6 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabase';
 import { Home, AlertCircle, ClipboardList, UserCheck, UserX, X } from 'lucide-react';
 
+const sessionUserId = '02e2fbce-0d47-447a-8d1c-e427e6279f46'; 
+
+
 const statusLabels = {
     pending: { label: 'Pending', color: 'bg-yellow-600' },
     assigned: { label: 'Assigned', color: 'bg-blue-500' },
@@ -11,7 +14,7 @@ const statusLabels = {
 };
 
 export default function HelpdeskDashboard() {
-    return <div className="text-white p-8">Helpdesk Dashboard is working!</div>;
+    /*return <div className="text-white p-8">Helpdesk Dashboard is working!</div>;*/
 
     const [assignments, setAssignments] = useState([]);
     const [contractors, setContractors] = useState([]);
@@ -239,6 +242,7 @@ export default function HelpdeskDashboard() {
         </div>
     );
 }
+
 
 
 
