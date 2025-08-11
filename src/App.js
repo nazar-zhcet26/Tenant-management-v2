@@ -1,6 +1,6 @@
 // src/App.js
 import { useState, useEffect } from 'react';
-import { supabase } from './supabase';
+import { supabase } from './supabase';  // Listen for changesimport { useState, useEffect } from 'react';
 import AppRoutes from './components/routes';
 
 function App() {
@@ -13,10 +13,6 @@ function App() {
       setSession(data.session);
       setRole(data.session?.user?.user_metadata?.role || null);
     });
-
-    // Listen for changesimport { useState, useEffect } from 'react';
-import { supabase } from './supabase';
-import AppRoutes from './components/routes';
 
 function App() {
   const [session, setSession] = useState(null);
