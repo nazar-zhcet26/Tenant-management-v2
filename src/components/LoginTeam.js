@@ -1,16 +1,30 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabase';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 
 export default function LoginTeam() {
+    const navigate = useNavigate();
+    const location = useLocation();
+
+    // Get role from URL query param
+    const queryParams = new URLSearchParams(location.search);
+    const roleFromQuery = queryParams.get('role'); // 'helpdesk' or 'contractor'
+
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [errorMsg, setErrorMsg] = useState('');
-    const navigate = useNavigate();
+
+    // Optional: Customize UI based on roleFromQuery
+    const roleLabel = roleFromQuery === 'helpdesk' ? 'Helpdesk' : roleFromQuery === 'contractor' ? 'Contractor' : 'Team';
 
     const handleLogin = async (e) => {
         e.preventDefault();
         setErrorMsg('');
+
+        if (!roleFromQuery || (roleFromQuery !== 'helpdesk' && roleFromQuery !== 'contractor')) {
+            setErrorMsg('Invalid login role. Please use the correct login link.');
+            return;
+        }
 
         const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
             email,
@@ -36,19 +50,24 @@ export default function LoginTeam() {
             return;
         }
 
+        // Check if profile role matches URL role param
+        if (profileData.role !== roleFromQuery) {
+            setErrorMsg(`Access denied. This login is for ${roleFromQuery} users only.`);
+            await supabase.auth.signOut();
+            return;
+        }
+
+        // Redirect based on role
         if (profileData.role === 'helpdesk') {
             navigate('/helpdesk-dashboard');
         } else if (profileData.role === 'contractor') {
             navigate('/contractor-dashboard');
-        } else {
-            setErrorMsg('Access denied. Please use the correct login portal.');
-            await supabase.auth.signOut();
         }
     };
 
     return (
         <div className="min-h-screen flex flex-col justify-center items-center bg-gradient-to-br from-slate-800 to-slate-900 text-white p-6">
-            <h1 className="text-3xl mb-6">Team Login</h1>
+            <h1 className="text-3xl mb-6">{roleLabel} Login</h1>
             <form
                 onSubmit={handleLogin}
                 className="bg-white/10 rounded p-6 flex flex-col w-full max-w-sm"
@@ -63,6 +82,7 @@ export default function LoginTeam() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
+                    autoFocus
                 />
 
                 <label className="mb-2 font-semibold" htmlFor="password">
@@ -89,4 +109,3 @@ export default function LoginTeam() {
         </div>
     );
 }
-
