@@ -7,10 +7,10 @@ import Signup              from './Signup';
 import CheckYourEmail      from './CheckYourEmail';
 import MaintenanceReporter from './MaintenanceReporter';
 import LandlordDashboard   from './LandlordDashboard';
-import HelpdeskDashboard   from './HelpdeskDashboard';       // import helpdesk
-import ContractorDashboard from './ContractorDashboard';     // import contractor
-import MaintenanceLanding  from './MaintenanceLanding';      // import new landing page
-import LoginTeam           from './LoginTeam';               // import team login page
+import HelpdeskDashboard   from './HelpdeskDashboard';
+import ContractorDashboard from './ContractorDashboard';
+import MaintenanceLanding  from './MaintenanceLanding';
+import LoginTeam           from './LoginTeam';
 import ProtectedRoute      from './ProtectedRoute';
 import TenantReports       from './TenantReports';
 
@@ -22,17 +22,20 @@ export default function AppRoutes({ session, role }) {
       <Route path="/login"              element={<Login />} />
       <Route path="/signup"             element={<Signup />} />
       <Route path="/check-your-email"   element={<CheckYourEmail />} />
-      {/* New Maintenance Landing Page */}
       <Route path="/maintenance-portal" element={<MaintenanceLanding />} />
-      {/* New Helpdesk and Contractor Login */}
       <Route path="/team-login" element={<LoginTeam />} />
 
+      {/* Direct access (unprotected) to dashboards for testing */}
+      <Route path="/helpdesk-dashboard" element={<HelpdeskDashboard />} />
+      <Route path="/contractor-dashboard" element={<ContractorDashboard />} />
+
+      {/* Protected Routes */}
       {/* Tenant-only */}
       <Route
         path="/report"
         element={
           <ProtectedRoute session={session} role={role} allowedRole="tenant">
-            <MaintenanceReporter/>
+            <MaintenanceReporter />
           </ProtectedRoute>
         }
       />
@@ -50,27 +53,27 @@ export default function AppRoutes({ session, role }) {
         path="/dashboard"
         element={
           <ProtectedRoute session={session} role={role} allowedRole="landlord">
-            <LandlordDashboard/>
+            <LandlordDashboard />
           </ProtectedRoute>
         }
       />
 
-      {/* Helpdesk-only */}
+      {/* Helpdesk-only protected */}
       <Route
-        path="/helpdesk-dashboard"
+        path="/helpdesk-dashboard-protected"
         element={
           <ProtectedRoute session={session} role={role} allowedRole="helpdesk">
-            <HelpdeskDashboard/>
+            <HelpdeskDashboard />
           </ProtectedRoute>
         }
       />
 
-      {/* Contractor-only */}
+      {/* Contractor-only protected */}
       <Route
-        path="/contractor-dashboard"
+        path="/contractor-dashboard-protected"
         element={
           <ProtectedRoute session={session} role={role} allowedRole="contractor">
-            <ContractorDashboard/>
+            <ContractorDashboard />
           </ProtectedRoute>
         }
       />
