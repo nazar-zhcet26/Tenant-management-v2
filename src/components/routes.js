@@ -1,4 +1,3 @@
-// src/components/routes.js
 import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 
@@ -8,6 +7,10 @@ import Signup              from './Signup';
 import CheckYourEmail      from './CheckYourEmail';
 import MaintenanceReporter from './MaintenanceReporter';
 import LandlordDashboard   from './LandlordDashboard';
+import HelpdeskDashboard   from './HelpdeskDashboard';       // import helpdesk
+import ContractorDashboard from './ContractorDashboard';     // import contractor
+import MaintenanceLanding  from './MaintenanceLanding';      // import new landing page
+import LoginTeam           from './LoginTeam';               // import team login page
 import ProtectedRoute      from './ProtectedRoute';
 import TenantReports       from './TenantReports';
 
@@ -19,6 +22,10 @@ export default function AppRoutes({ session, role }) {
       <Route path="/login"              element={<Login />} />
       <Route path="/signup"             element={<Signup />} />
       <Route path="/check-your-email"   element={<CheckYourEmail />} />
+      {/* New Maintenance Landing Page */}
+      <Route path="/maintenance-portal" element={<MaintenanceLanding />} />
+      {/* New Helpdesk and Contractor Login */}
+      <Route path="/team-login" element={<LoginTeam />} />
 
       {/* Tenant-only */}
       <Route
@@ -29,20 +36,41 @@ export default function AppRoutes({ session, role }) {
           </ProtectedRoute>
         }
       />
-     <Route
-       path="/my-reports"
-       element={
-         <ProtectedRoute session={session} role={role} allowedRole="tenant">
-           <TenantReports />
-        </ProtectedRoute>
-  }
-/>
+      <Route
+        path="/my-reports"
+        element={
+          <ProtectedRoute session={session} role={role} allowedRole="tenant">
+            <TenantReports />
+          </ProtectedRoute>
+        }
+      />
+
       {/* Landlord-only */}
       <Route
         path="/dashboard"
         element={
           <ProtectedRoute session={session} role={role} allowedRole="landlord">
             <LandlordDashboard/>
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Helpdesk-only */}
+      <Route
+        path="/helpdesk-dashboard"
+        element={
+          <ProtectedRoute session={session} role={role} allowedRole="helpdesk">
+            <HelpdeskDashboard/>
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Contractor-only */}
+      <Route
+        path="/contractor-dashboard"
+        element={
+          <ProtectedRoute session={session} role={role} allowedRole="contractor">
+            <ContractorDashboard/>
           </ProtectedRoute>
         }
       />
