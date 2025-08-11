@@ -16,15 +16,16 @@ export default function LoginTeam() {
 
   const handleLogin = async (e) => {
     e.preventDefault();
+    console.log('Login attempt started'); // Log handler call
     setErrorMsg('');
     setLoading(true);
 
     try {
+      console.log('Calling supabase.auth.signInWithPassword...');
       const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
-
       console.log('loginData:', loginData);
       console.log('loginError:', loginError);
 
@@ -49,7 +50,11 @@ export default function LoginTeam() {
           { onConflict: 'id' }
         );
 
-      if (upsertError) console.warn('Profile upsert failed:', upsertError.message);
+      if (upsertError) {
+        console.warn('Profile upsert failed:', upsertError.message);
+      } else {
+        console.log('Profile upsert successful');
+      }
 
       // Fetch profile to confirm role
       const { data: profileData, error: profileError } = await supabase
@@ -64,6 +69,8 @@ export default function LoginTeam() {
         return;
       }
 
+      console.log('Fetched profile role:', profileData.role);
+
       if (profileData.role !== roleFromQuery) {
         setErrorMsg('Role mismatch. Please use the correct login portal.');
         await supabase.auth.signOut();
@@ -72,14 +79,16 @@ export default function LoginTeam() {
       }
 
       if (profileData.role === 'helpdesk') {
+        console.log('Redirecting to helpdesk dashboard');
         navigate('/helpdesk-dashboard');
       } else if (profileData.role === 'contractor') {
+        console.log('Redirecting to contractor dashboard');
         navigate('/contractor-dashboard');
       }
 
       setLoading(false);
     } catch (err) {
-      console.error('Login error:', err);
+      console.error('Login exception:', err);
       setErrorMsg('Unexpected error during login.');
       setLoading(false);
     }
