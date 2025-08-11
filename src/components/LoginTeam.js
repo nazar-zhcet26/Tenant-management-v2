@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+// src/components/LoginTeam.js
+import React, { useMemo, useState } from 'react';
 import { supabase } from '../supabase';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -6,135 +7,142 @@ export default function LoginTeam() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const queryParams = new URLSearchParams(location.search);
-  const roleFromQuery = queryParams.get('role'); // 'helpdesk' or 'contractor'
+  // Read ?role=helpdesk|contractor from query string
+  const roleFromQuery = useMemo(() => {
+    const q = new URLSearchParams(location.search);
+    const r = (q.get('role') || '').toLowerCase();
+    return r === 'helpdesk' || r === 'contractor' ? r : '';
+  }, [location.search]);
 
-  const [email, setEmail] = useState('');
+  const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading]   = useState(false);
 
   const handleLogin = async (e) => {
     e.preventDefault();
-    console.log('Login attempt started'); // Log handler call
     setErrorMsg('');
-    setLoading(true);
 
+    if (!roleFromQuery) {
+      setErrorMsg('Missing role. Please use the Maintenance Portal and choose your team.');
+      return;
+    }
+
+    setLoading(true);
     try {
-      console.log('Calling supabase.auth.signInWithPassword...');
+      // 1) Authenticate
       const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
-      console.log('loginData:', loginData);
-      console.log('loginError:', loginError);
 
-      if (loginError || !loginData.session) {
-        setErrorMsg('Login failed. Please check your credentials.');
+      if (loginError || !loginData?.session?.user?.id) {
+        setErrorMsg(loginError?.message || 'Login failed. Check your credentials.');
         setLoading(false);
         return;
       }
 
-      const user = loginData.user;
+      const userId = loginData.session.user.id;
 
-      // Upsert profile with role from query
-      const { error: upsertError } = await supabase
-        .from('profiles')
-        .upsert(
-          {
-            id: user.id,
-            email: user.email,
-            full_name: user.user_metadata.full_name || '',
-            role: roleFromQuery,
-          },
-          { onConflict: 'id' }
-        );
-
-      if (upsertError) {
-        console.warn('Profile upsert failed:', upsertError.message);
-      } else {
-        console.log('Profile upsert successful');
-      }
-
-      // Fetch profile to confirm role
-      const { data: profileData, error: profileError } = await supabase
+      // 2) Fetch profile role (must already exist; you create it manually)
+      const { data: profile, error: profileErr } = await supabase
         .from('profiles')
         .select('role')
-        .eq('id', user.id)
+        .eq('id', userId)
         .single();
 
-      if (profileError || !profileData) {
-        setErrorMsg('User profile not found.');
-        setLoading(false);
-        return;
-      }
-
-      console.log('Fetched profile role:', profileData.role);
-
-      if (profileData.role !== roleFromQuery) {
-        setErrorMsg('Role mismatch. Please use the correct login portal.');
+      if (profileErr || !profile?.role) {
         await supabase.auth.signOut();
+        setErrorMsg('No profile/role found for this account. Contact admin.');
         setLoading(false);
         return;
       }
 
-      if (profileData.role === 'helpdesk') {
-        console.log('Redirecting to helpdesk dashboard');
-        navigate('/helpdesk-dashboard');
-      } else if (profileData.role === 'contractor') {
-        console.log('Redirecting to contractor dashboard');
-        navigate('/contractor-dashboard');
+      // 3) Enforce strict role match
+      if (profile.role !== roleFromQuery) {
+        await supabase.auth.signOut();
+        setErrorMsg(`This account is not a ${roleFromQuery}. Use the correct portal.`);
+        setLoading(false);
+        return;
       }
 
-      setLoading(false);
+      // 4) Route to the correct dashboard (no "-protected" suffix)
+      if (roleFromQuery === 'helpdesk') {
+        navigate('/helpdesk-dashboard', { replace: true });
+      } else {
+        navigate('/contractor-dashboard', { replace: true });
+      }
     } catch (err) {
-      console.error('Login exception:', err);
-      setErrorMsg('Unexpected error during login.');
+      console.error(err);
+      setErrorMsg('Unexpected error. Please try again.');
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6">
       <form
         onSubmit={handleLogin}
-        className="bg-white/10 backdrop-blur-lg p-8 rounded-3xl border border-white/20 space-y-6 max-w-sm w-full"
+        className="w-full max-w-sm space-y-4 bg-white/5 backdrop-blur rounded-2xl p-6 border border-white/10 shadow-2xl"
       >
-        <h2 className="text-2xl font-semibold text-white text-center">
-          Log in as {roleFromQuery?.charAt(0).toUpperCase() + roleFromQuery?.slice(1) || 'Team'}
-        </h2>
+        <h1 className="text-xl font-semibold text-white">
+          {roleFromQuery
+            ? `${roleFromQuery[0].toUpperCase()}${roleFromQuery.slice(1)} Login`
+            : 'Maintenance Team Login'}
+        </h1>
 
-        <input
-          type="email"
-          placeholder="Email Address"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-          className="w-full px-4 py-3 rounded-lg bg-white/20 text-white placeholder-gray-300 focus:outline-none"
-          autoFocus
-        />
+        {roleFromQuery === '' && (
+          <p className="text-sm text-amber-300">
+            Tip: Go to the Maintenance Portal and choose Helpdesk or Contractor.
+          </p>
+        )}
 
-        <input
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-          className="w-full px-4 py-3 rounded-lg bg-white/20 text-white placeholder-gray-300 focus:outline-none"
-        />
+        {errorMsg && <div className="text-sm text-red-400">{errorMsg}</div>}
 
-        {errorMsg && <p className="text-red-400 text-center">{errorMsg}</p>}
+        <label className="block">
+          <span className="text-slate-200 text-sm">Email</span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="username"
+            required
+            className="mt-1 w-full px-4 py-3 rounded-lg bg-white/10 text-white placeholder-slate-300 focus:outline-none"
+            placeholder="you@example.com"
+          />
+        </label>
+
+        <label className="block">
+          <span className="text-slate-200 text-sm">Password</span>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            required
+            className="mt-1 w-full px-4 py-3 rounded-lg bg-white/10 text-white placeholder-slate-300 focus:outline-none"
+            placeholder="Your password"
+          />
+        </label>
 
         <button
           type="submit"
           disabled={loading}
-          className={`w-full py-3 font-bold rounded-lg transition ${
+          className={`w-full py-3 font-semibold rounded-lg transition ${
             loading
-              ? 'bg-gray-600 cursor-not-allowed'
-              : 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700'
-          } text-white`}
+              ? 'bg-gray-600 cursor-not-allowed text-white'
+              : 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white'
+          }`}
         >
-          {loading ? 'Logging in...' : 'Log in'}
+          {loading ? 'Signing in…' : 'Sign in'}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => navigate('/maintenance-portal')}
+          className="w-full py-3 font-semibold rounded-lg border border-white/20 text-white hover:bg-white/10 transition"
+        >
+          Back to Maintenance Portal
         </button>
       </form>
     </div>
