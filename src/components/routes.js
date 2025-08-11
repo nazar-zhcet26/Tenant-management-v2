@@ -1,3 +1,4 @@
+// src/components/routes.js
 import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 
@@ -14,22 +15,21 @@ import LoginTeam           from './LoginTeam';
 import ProtectedRoute      from './ProtectedRoute';
 import TenantReports       from './TenantReports';
 
+/**
+ * AppRoutes expects `session` and `role` props from App.js
+ *   <AppRoutes session={session} role={role} />
+ */
 export default function AppRoutes({ session, role }) {
   return (
     <Routes>
-      {/* Public */}
-      <Route path="/"                   element={<LandingPage />} />
-      <Route path="/login"              element={<Login />} />
-      <Route path="/signup"             element={<Signup />} />
-      <Route path="/check-your-email"   element={<CheckYourEmail />} />
-      <Route path="/maintenance-portal" element={<MaintenanceLanding />} />
-      <Route path="/team-login" element={<LoginTeam />} />
+      {/* Public: default landing for tenants & landlords */}
+      <Route path="/" element={<LandingPage />} />
 
-      {/* Direct access (unprotected) to dashboards for testing */}
-      <Route path="/helpdesk-dashboard" element={<HelpdeskDashboard />} />
-      <Route path="/contractor-dashboard" element={<ContractorDashboard />} />
+      {/* Tenant/Landlord auth */}
+      <Route path="/login" element={<Login />} />
+      <Route path="/signup" element={<Signup />} />
+      <Route path="/check-email" element={<CheckYourEmail />} />
 
-      {/* Protected Routes */}
       {/* Tenant-only */}
       <Route
         path="/report"
@@ -58,9 +58,13 @@ export default function AppRoutes({ session, role }) {
         }
       />
 
-      {/* Helpdesk-only protected */}
+      {/* Maintenance Team entry + login (role picked via ?role=helpdesk|contractor) */}
+      <Route path="/maintenance-portal" element={<MaintenanceLanding />} />
+      <Route path="/maintenance-login" element={<LoginTeam />} />
+
+      {/* Helpdesk-only */}
       <Route
-        path="/helpdesk-dashboard-protected"
+        path="/helpdesk-dashboard"
         element={
           <ProtectedRoute session={session} role={role} allowedRole="helpdesk">
             <HelpdeskDashboard />
@@ -68,9 +72,9 @@ export default function AppRoutes({ session, role }) {
         }
       />
 
-      {/* Contractor-only protected */}
+      {/* Contractor-only */}
       <Route
-        path="/contractor-dashboard-protected"
+        path="/contractor-dashboard"
         element={
           <ProtectedRoute session={session} role={role} allowedRole="contractor">
             <ContractorDashboard />
