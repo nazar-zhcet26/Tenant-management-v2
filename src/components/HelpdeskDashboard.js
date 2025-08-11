@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabase';
 import { Home, AlertCircle, ClipboardList, UserCheck, UserX, X } from 'lucide-react';
 
-const sessionUserId = '02e2fbce-0d47-447a-8d1c-e427e6279f46'; 
+const sessionUserId = 02e2fbce-0d47-447a-8d1c-e427e6279f46; 
 
 
 const statusLabels = {
@@ -242,6 +242,7 @@ export default function HelpdeskDashboard() {
         </div>
     );
 }
+
 
 
 
