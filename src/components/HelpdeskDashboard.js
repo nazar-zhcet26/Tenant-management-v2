@@ -11,6 +11,8 @@ const statusLabels = {
 };
 
 export default function HelpdeskDashboard() {
+    return <div className="text-white p-8">Helpdesk Dashboard is working!</div>;
+
     const [assignments, setAssignments] = useState([]);
     const [contractors, setContractors] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -237,5 +239,6 @@ export default function HelpdeskDashboard() {
         </div>
     );
 }
+
 
 
