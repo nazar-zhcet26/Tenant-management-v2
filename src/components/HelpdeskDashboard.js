@@ -25,7 +25,7 @@ export default function HelpdeskDashboard() {
                 // Fetch helpdesk assignments with related info
                 const { data: assignmentData, error: assignmentError } = await supabase
                     .from('helpdesk_assignments')
-                    .select(`
+                    .select(
             *,
             maintenance_reports (
               title,
@@ -49,7 +49,7 @@ export default function HelpdeskDashboard() {
               email,
               services_provided
             )
-          `)
+          )
                     .in('status', ['pending', 'assigned', 'accepted', 'rejected'])
                     .order('created_at', { ascending: false });
 
@@ -237,4 +237,5 @@ export default function HelpdeskDashboard() {
         </div>
     );
 }
+
 
