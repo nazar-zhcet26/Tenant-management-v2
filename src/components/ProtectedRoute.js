@@ -1,9 +1,27 @@
 // src/components/ProtectedRoute.js
 import React, { useEffect, useState } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
-import { supabase } from '../supabase';
+import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '../supabase';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// REST helper: read profiles.role with explicit apikey+bearer (works even if SDK is flaky)
+async function fetchProfileRole(userId) {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) return null;
+
+  const url = `${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=role&apikey=${encodeURIComponent(SUPABASE_ANON_KEY)}`;
+  const res = await fetch(url, {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!res.ok) return null;
+  const rows = await res.json().catch(() => []);
+  return Array.isArray(rows) && rows.length ? (rows[0]?.role || null) : null;
+}
 
 /**
  * Usage:
@@ -20,7 +38,7 @@ export default function ProtectedRoute({ allowed = [], fallback = '/login', chil
     let alive = true;
 
     (async () => {
-      // briefly poll for a session (handles just-logged-in race)
+      // 1) Wait briefly for session (covers just-logged-in race)
       let { data } = await supabase.auth.getSession();
       let session = data?.session || null;
       for (let i = 0; !session && i < 12; i++) { // ~3s max
@@ -30,17 +48,30 @@ export default function ProtectedRoute({ allowed = [], fallback = '/login', chil
       }
       if (!alive) return;
 
-      if (!session) return setStatus('noauth');
+      if (!session) {
+        setStatus('noauth');
+        return;
+      }
 
-      const role = String(session.user?.user_metadata?.role || '').toLowerCase();
-      if (allowed.length && !allowed.includes(role)) return setStatus('forbidden');
+      // 2) Get role from JWT first
+      let role = String(session.user?.user_metadata?.role || '').toLowerCase();
+
+      // 3) Fallback to profiles.role if JWT missing (common for helpdesk/contractor)
+      if (!role) {
+        role = String(await fetchProfileRole(session.user.id) || '').toLowerCase();
+      }
+
+      if (allowed.length && !allowed.includes(role)) {
+        setStatus('forbidden');
+        return;
+      }
 
       setStatus('ok');
     })();
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((_evt, s) => {
       if (!alive) return;
-      if (!session) setStatus('noauth');
+      if (!s) setStatus('noauth');
     });
 
     return () => {
@@ -58,7 +89,6 @@ export default function ProtectedRoute({ allowed = [], fallback = '/login', chil
   }
 
   if (status === 'noauth') {
-    // choose which role to hint on the login page
     const roleQuery =
       allowed.includes('landlord') ? 'landlord' :
       allowed.includes('helpdesk') ? 'helpdesk' :
