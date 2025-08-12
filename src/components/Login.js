@@ -1,14 +1,10 @@
 // src/components/Login.js
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { supabase } from '../supabase';
+import { supabase } from './supabase';
 
-function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise,
-    new Promise((_, rej) => setTimeout(() => rej(new Error(`${label} timeout after ${ms}ms`)), ms)),
-  ]);
-}
+// tiny helper for polling
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export default function Login() {
   const [email, setEmail]     = useState('');
@@ -17,12 +13,7 @@ export default function Login() {
   const [err, setErr]         = useState('');
   const navigate              = useNavigate();
   const [searchParams]        = useSearchParams();
-
-  // Only allow tenant/landlord from the query; default tenant
-  const roleFromQuery = useMemo(() => {
-    const r = (searchParams.get('role') || 'tenant').toLowerCase();
-    return r === 'tenant' || r === 'landlord' ? r : 'tenant';
-  }, [searchParams]);
+  const roleFromQuery         = (searchParams.get('role') || 'tenant').toLowerCase(); // 'tenant' | 'landlord'
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -30,48 +21,71 @@ export default function Login() {
     setLoading(true);
 
     try {
-      // 1) Sign in (never let this hang forever)
-      const { data: loginData, error: loginError } = await withTimeout(
-        supabase.auth.signInWithPassword({ email, password }),
-        10000,
-        'signIn'
-      );
-      if (loginError) throw loginError;
+      // Kick off sign-in but do not rely on it finishing on time
+      const signInP = supabase.auth.signInWithPassword({ email, password });
 
-      const user = loginData?.user;
-      const userId = user?.id;
-      if (!userId) throw new Error('Login failed. Check your credentials.');
+      // Track whether signIn settles and with what error
+      let signInSettled = false;
+      let signInError = null;
+      signInP
+        .then(({ error }) => { signInSettled = true; signInError = error || null; })
+        .catch((e) => { signInSettled = true; signInError = e; });
 
-      // 2) Ensure session is actually present (race guard)
-      await withTimeout(supabase.auth.getSession(), 5000, 'getSession');
-
-      // 3) Read existing profile role (don’t clobber it)
-      const { data: got, error: selErr } = await withTimeout(
-        supabase.from('profiles').select('id, role, full_name').eq('id', userId).limit(1),
-        8000,
-        'fetchProfile'
-      );
-      if (selErr) throw selErr;
-
-      let role = got?.[0]?.role;
-      if (!role) {
-        // 4) Create profile if missing; use role from query ONLY when no profile exists
-        const full_name = user?.user_metadata?.full_name || '';
-        const { error: insErr } = await withTimeout(
-          supabase.from('profiles').insert({
-            id: userId,
-            email: user?.email || email,
-            full_name,
-            role: roleFromQuery, // seed role on first login only
-          }),
-          8000,
-          'insertProfile'
-        );
-        if (insErr) throw insErr;
-        role = roleFromQuery;
+      // Poll for a session (auth token) up to ~6s while signIn is in-flight
+      let session = null;
+      for (let i = 0; i < 24; i++) {
+        const { data } = await supabase.auth.getSession();
+        session = data?.session || null;
+        if (session) break;                    // success: we have a session from Supabase
+        if (signInSettled && signInError) break; // early stop on explicit failure
+        await sleep(250);
       }
 
-      // 5) Route by actual stored role
+      // If signIn already failed, surface that
+      if (signInSettled && signInError) {
+        throw (signInError instanceof Error ? signInError : new Error(signInError?.message || 'Login failed'));
+      }
+
+      // Last small window to let signIn settle if we still don't have a session
+      if (!session) {
+        const race = await Promise.race([
+          signInP,
+          sleep(2000).then(() => ({ timeout: true })),
+        ]);
+        if (!race?.timeout) {
+          const { data } = await supabase.auth.getSession();
+          session = data?.session || null;
+        }
+      }
+
+      if (!session) throw new Error('Login did not complete. Please try again.');
+
+      // We have a session → fetch profile (don’t overwrite an existing role)
+      const userId = session.user.id;
+      const { data: got, error: selErr } = await supabase
+        .from('profiles')
+        .select('id, role, full_name')
+        .eq('id', userId)
+        .limit(1);
+      if (selErr) throw selErr;
+
+      let role = got?.[0]?.role || null;
+      if (!role) {
+        // Insert profile only if missing role/row; seed role from the URL on first login
+        const full_name = session.user.user_metadata?.full_name || '';
+        const { error: insErr } = await supabase
+          .from('profiles')
+          .insert({
+            id: userId,
+            email: session.user.email || email,
+            full_name,
+            role: roleFromQuery === 'landlord' ? 'landlord' : 'tenant',
+          });
+        if (insErr) throw insErr;
+        role = roleFromQuery === 'landlord' ? 'landlord' : 'tenant';
+      }
+
+      // Route based on stored role
       if (role === 'tenant') {
         navigate('/report', { replace: true });
       } else if (role === 'landlord') {
@@ -81,7 +95,6 @@ export default function Login() {
       } else if (role === 'contractor') {
         navigate('/contractor-dashboard', { replace: true });
       } else {
-        // Unknown role → sign out to avoid limbo
         await supabase.auth.signOut();
         throw new Error('Unsupported role on this account. Contact admin.');
       }
@@ -89,8 +102,7 @@ export default function Login() {
       console.error('[login]', e);
       setErr(e.message || 'Unexpected error. Please try again.');
     } finally {
-      // ALWAYS clear loading so the button never sticks
-      setLoading(false);
+      setLoading(false); // never leave the spinner on
     }
   };
 
@@ -130,7 +142,7 @@ export default function Login() {
               : 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700'
           } text-white`}
         >
-          {loading ? 'Logging in…' : 'Log in'}
+          {loading ? 'Logging in...' : 'Log in'}
         </button>
 
         <p className="text-center text-gray-300 text-sm">
