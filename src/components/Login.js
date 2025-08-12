@@ -1,9 +1,18 @@
 // src/components/Login.js
-import { useState, useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../supabase';
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// read envs in either CRA or Vite builds (for the fallback fetch)
+const SUPABASE_URL =
+  (import.meta?.env && import.meta.env.VITE_SUPABASE_URL) ||
+  process.env.REACT_APP_SUPABASE_URL;
+
+const SUPABASE_ANON_KEY =
+  (import.meta?.env && import.meta.env.VITE_SUPABASE_ANON_KEY) ||
+  process.env.REACT_APP_SUPABASE_ANON_KEY;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -13,11 +22,37 @@ export default function Login() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  // Only tenant | landlord here
+  // This page is ONLY for tenants & landlords
   const roleFromQuery = useMemo(() => {
     const r = (searchParams.get('role') || 'tenant').toLowerCase();
     return r === 'tenant' || r === 'landlord' ? r : 'tenant';
   }, [searchParams]);
+
+  async function signInFallbackViaFetch(email, password) {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+      throw new Error('Auth configuration missing.');
+    }
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email, password }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      const msg = j?.error_description || j?.message || `Auth error ${res.status}`;
+      throw new Error(msg);
+    }
+    const data = await res.json(); // access_token, refresh_token, user
+    const { error } = await supabase.auth.setSession({
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+    });
+    if (error) throw error;
+    return data;
+  }
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -25,40 +60,53 @@ export default function Login() {
     setLoading(true);
 
     try {
-      // Kick off sign-in but don’t rely on it to settle on time
+      // Kick off SDK sign-in but don’t rely on it resolving on time
       const signInP = supabase.auth.signInWithPassword({ email, password });
-
       let signInSettled = false;
-      let signInError = null;
-      signInP.then(({ error }) => { signInSettled = true; signInError = error || null; })
-             .catch((e) => { signInSettled = true; signInError = e; });
+      let signInErr = null;
+      signInP
+        .then(({ error }) => {
+          signInSettled = true;
+          signInErr = error || null;
+        })
+        .catch((e) => {
+          signInSettled = true;
+          signInErr = e;
+        });
 
-      // Poll for a session while signIn is in-flight
+      // Poll for a session for ~6s while sign-in runs
       let session = null;
-      for (let i = 0; i < 24; i++) { // ~6s
+      for (let i = 0; i < 24; i++) {
         const { data } = await supabase.auth.getSession();
         session = data?.session || null;
         if (session) break;
-        if (signInSettled && signInError) break;
+        if (signInSettled && signInErr) break;
         await sleep(250);
       }
 
-      if (signInSettled && signInError) {
-        throw (signInError instanceof Error ? signInError : new Error(signInError?.message || 'Login failed'));
+      // If SDK already failed, surface it
+      if (signInSettled && signInErr) {
+        throw (signInErr instanceof Error
+          ? signInErr
+          : new Error(signInErr?.message || 'Login failed'));
       }
 
-      // Last little grace period
+      // Still no session? brief grace, then manual token fallback
       if (!session) {
-        const race = await Promise.race([signInP, sleep(2000).then(() => ({ timeout: true }))]);
-        if (!race?.timeout) {
-          const { data } = await supabase.auth.getSession();
-          session = data?.session || null;
+        await Promise.race([signInP, sleep(1500)]);
+        const { data } = await supabase.auth.getSession();
+        session = data?.session || null;
+
+        if (!session) {
+          await signInFallbackViaFetch(email, password);
+          const again = await supabase.auth.getSession();
+          session = again?.data?.session || null;
         }
       }
 
       if (!session) throw new Error('Login did not complete. Please try again.');
 
-      // Fetch or seed tenant/landlord profile
+      // Fetch or backfill tenant/landlord profile
       const userId = session.user.id;
       const userEmail = session.user.email || email;
 
@@ -72,7 +120,7 @@ export default function Login() {
       let role = profile?.role || null;
 
       if (!profile) {
-        // First login: create profile with role from query
+        // First login: create a profile, seed role from URL
         const full_name = session.user.user_metadata?.full_name || '';
         const { error: insErr } = await supabase.from('profiles').insert({
           id: userId,
@@ -83,7 +131,7 @@ export default function Login() {
         if (insErr) throw insErr;
         role = roleFromQuery;
       } else if (!role) {
-        // Backfill missing role (don’t overwrite if already set)
+        // Backfill missing role once (don’t overwrite if already set)
         const { error: updErr } = await supabase
           .from('profiles')
           .update({ role: roleFromQuery })
@@ -92,19 +140,19 @@ export default function Login() {
         role = roleFromQuery;
       }
 
-      // Hard stop: this page is ONLY for tenant/landlord
+      // Hard stop: this page is only for tenant/landlord
       if (role !== 'tenant' && role !== 'landlord') {
         await supabase.auth.signOut();
         throw new Error('This account is for the Maintenance Portal. Use the Helpdesk/Contractor login.');
       }
 
-      // Optional: enforce the URL role (nice UX guard)
+      // Optional UX guard: enforce URL role
       if (roleFromQuery && role !== roleFromQuery) {
         await supabase.auth.signOut();
         throw new Error(`This account is a ${role}. Open the correct login page.`);
       }
 
-      // Route
+      // Route by role
       if (role === 'tenant') navigate('/report', { replace: true });
       else navigate('/dashboard', { replace: true }); // landlord
     } catch (e) {
@@ -118,7 +166,9 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-violet-900 to-fuchsia-900 p-6">
       <form onSubmit={handleLogin} className="w-full max-w-sm space-y-4 bg-white/10 rounded-2xl p-6 border border-white/20">
-        <h1 className="text-xl font-semibold text-white">Log in as {roleFromQuery[0].toUpperCase()+roleFromQuery.slice(1)}</h1>
+        <h1 className="text-xl font-semibold text-white">
+          Log in as {roleFromQuery[0].toUpperCase() + roleFromQuery.slice(1)}
+        </h1>
 
         {err && <div className="text-sm text-red-300">{err}</div>}
 
@@ -151,14 +201,18 @@ export default function Login() {
         <button
           type="submit"
           disabled={loading}
-          className={`w-full py-3 font-semibold rounded-lg transition ${loading ? 'bg-gray-600 cursor-not-allowed' : 'bg-white text-purple-900 hover:bg-violet-100'}`}
+          className={`w-full py-3 font-semibold rounded-lg transition ${
+            loading ? 'bg-gray-600 cursor-not-allowed' : 'bg-white text-purple-900 hover:bg-violet-100'
+          }`}
         >
           {loading ? 'Logging in…' : 'Log in'}
         </button>
 
-        <div className="text-xs text-slate-200">
-          Need an account? <a href={`/signup?role=${roleFromQuery}`} className="underline">Sign up</a>
-        </div>
+        {roleFromQuery === 'tenant' && (
+          <div className="text-xs text-slate-200">
+            Need an account? <a href="/signup?role=tenant" className="underline">Sign up</a>
+          </div>
+        )}
       </form>
     </div>
   );
