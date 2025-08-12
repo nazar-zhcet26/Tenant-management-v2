@@ -1,103 +1,110 @@
 // src/components/LoginTeam.js
 import React, { useMemo, useState } from 'react';
-import { supabase } from '../supabase';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '../supabase';
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function useRoleFromQuery() {
+  const { search } = useLocation();
+  const r = (new URLSearchParams(search).get('role') || '').toLowerCase();
+  return r === 'helpdesk' || r === 'contractor' ? r : '';
+}
+
+// Auth via REST, then hydrate SDK (fast + reliable)
+async function authViaRest(email, password) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error_description || data?.message || `Auth error ${res.status}`);
+
+  const { error } = await supabase.auth.setSession({
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+  });
+  if (error) throw error;
+  return data;
+}
+
+async function fetchProfileRole() {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  const uid = data?.session?.user?.id;
+  if (!token || !uid) return null;
+
+  const url = `${SUPABASE_URL}/rest/v1/profiles?id=eq.${uid}&select=role&apikey=${encodeURIComponent(SUPABASE_ANON_KEY)}`;
+  const res = await fetch(url, {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!res.ok) return null;
+  const rows = await res.json().catch(() => []);
+  return Array.isArray(rows) && rows.length ? (rows[0]?.role || null) : null;
+}
 
 export default function LoginTeam() {
   const navigate = useNavigate();
-  const location = useLocation();
+  const roleFromQuery = useRoleFromQuery();
 
-  // Read ?role=helpdesk|contractor from query string
-  const roleFromQuery = useMemo(() => {
-    const q = new URLSearchParams(location.search);
-    const r = (q.get('role') || '').toLowerCase();
-    return r === 'helpdesk' || r === 'contractor' ? r : '';
-  }, [location.search]);
+  const [email, setEmail] = useState('');
+  const [password, setPass] = useState('');
+  const [err, setErr] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const [email, setEmail]       = useState('');
-  const [password, setPassword] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
-  const [loading, setLoading]   = useState(false);
-
-  const handleLogin = async (e) => {
+  async function handleLogin(e) {
     e.preventDefault();
-    setErrorMsg('');
-
+    setErr('');
     if (!roleFromQuery) {
-      setErrorMsg('Missing role. Please use the Maintenance Portal and choose your team.');
+      setErr('Missing role. Open this page from Maintenance Portal.');
       return;
     }
-
     setLoading(true);
+
     try {
-      // 1) Authenticate
-      const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      // 1) Auth (REST) and hydrate session
+      await authViaRest(email, password);
 
-      if (loginError || !loginData?.session?.user?.id) {
-        setErrorMsg(loginError?.message || 'Login failed. Check your credentials.');
-        setLoading(false);
-        return;
+      // 2) Poll briefly for session (race guard)
+      let { data } = await supabase.auth.getSession();
+      let session = data?.session || null;
+      for (let i = 0; !session && i < 12; i++) { // ~3s
+        await sleep(250);
+        ({ data } = await supabase.auth.getSession());
+        session = data?.session || null;
       }
+      if (!session) throw new Error('Login did not complete. Please try again.');
 
-      const userId = loginData.session.user.id;
-
-      // 2) Fetch profile role (must already exist; you create it manually)
-      const { data: profile, error: profileErr } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', userId)
-        .single();
-
-      if (profileErr || !profile?.role) {
+      // 3) Fetch role from profiles (admin-provisioned accounts)
+      const dbRole = String(await fetchProfileRole() || '').toLowerCase();
+      if (!dbRole) throw new Error('No role set on this account. Ask admin to provision it.');
+      if (dbRole !== roleFromQuery) {
         await supabase.auth.signOut();
-        setErrorMsg('No profile/role found for this account. Contact admin.');
-        setLoading(false);
-        return;
+        throw new Error(`This account is a ${dbRole}. Open the correct portal.`);
       }
 
-      // 3) Enforce strict role match
-      if (profile.role !== roleFromQuery) {
-        await supabase.auth.signOut();
-        setErrorMsg(`This account is not a ${roleFromQuery}. Use the correct portal.`);
-        setLoading(false);
-        return;
-      }
-
-      // 4) Route to the correct dashboard (no "-protected" suffix)
-      if (roleFromQuery === 'helpdesk') {
-        navigate('/helpdesk-dashboard', { replace: true });
-      } else {
-        navigate('/contractor-dashboard', { replace: true });
-      }
-    } catch (err) {
-      console.error(err);
-      setErrorMsg('Unexpected error. Please try again.');
+      // 4) Route
+      navigate(dbRole === 'helpdesk' ? '/helpdesk-dashboard' : '/contractor-dashboard', { replace: true });
+    } catch (e) {
+      console.error('[team login]', e);
+      setErr(e.message || 'Unexpected error. Please try again.');
+    } finally {
       setLoading(false);
     }
-  };
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6">
-      <form
-        onSubmit={handleLogin}
-        className="w-full max-w-sm space-y-4 bg-white/5 backdrop-blur rounded-2xl p-6 border border-white/10 shadow-2xl"
-      >
+      <form onSubmit={handleLogin} className="w-full max-w-sm space-y-4 bg-white/5 backdrop-blur rounded-2xl p-6 border border-white/10 shadow-2xl">
         <h1 className="text-xl font-semibold text-white">
-          {roleFromQuery
-            ? `${roleFromQuery[0].toUpperCase()}${roleFromQuery.slice(1)} Login`
-            : 'Maintenance Team Login'}
+          {roleFromQuery ? `${roleFromQuery[0].toUpperCase()}${roleFromQuery.slice(1)} Login` : 'Maintenance Team Login'}
         </h1>
 
-        {roleFromQuery === '' && (
-          <p className="text-sm text-amber-300">
-            Tip: Go to the Maintenance Portal and choose Helpdesk or Contractor.
-          </p>
-        )}
-
-        {errorMsg && <div className="text-sm text-red-400">{errorMsg}</div>}
+        {err && <div className="text-sm text-red-400">{err}</div>}
 
         <label className="block">
           <span className="text-slate-200 text-sm">Email</span>
@@ -117,7 +124,7 @@ export default function LoginTeam() {
           <input
             type="password"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) => setPass(e.target.value)}
             autoComplete="current-password"
             required
             className="mt-1 w-full px-4 py-3 rounded-lg bg-white/10 text-white placeholder-slate-300 focus:outline-none"
@@ -129,9 +136,7 @@ export default function LoginTeam() {
           type="submit"
           disabled={loading}
           className={`w-full py-3 font-semibold rounded-lg transition ${
-            loading
-              ? 'bg-gray-600 cursor-not-allowed text-white'
-              : 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white'
+            loading ? 'bg-gray-600 cursor-not-allowed text-white' : 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white'
           }`}
         >
           {loading ? 'Signing in…' : 'Sign in'}
@@ -139,7 +144,7 @@ export default function LoginTeam() {
 
         <button
           type="button"
-          onClick={() => navigate('/maintenance-portal')}
+          onClick={() => (window.location.href = '/maintenance-portal')}
           className="w-full py-3 font-semibold rounded-lg border border-white/20 text-white hover:bg-white/10 transition"
         >
           Back to Maintenance Portal
