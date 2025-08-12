@@ -1,15 +1,43 @@
+// src/supabase.js
 import { createClient } from '@supabase/supabase-js';
 
+/**
+ * Read env vars from CRA, Vite, or Next — works in Preview & Production.
+ */
 export const SUPABASE_URL =
-  (import.meta?.env && import.meta.env.VITE_SUPABASE_URL) ||
-  process.env.REACT_APP_SUPABASE_URL;
+  (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SUPABASE_URL) ||
+  process.env.REACT_APP_SUPABASE_URL ||
+  process.env.NEXT_PUBLIC_SUPABASE_URL;
 
 export const SUPABASE_ANON_KEY =
-  (import.meta?.env && import.meta.env.VITE_SUPABASE_ANON_KEY) ||
-  process.env.REACT_APP_SUPABASE_ANON_KEY;
+  (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SUPABASE_ANON_KEY) ||
+  process.env.REACT_APP_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
+// Helpful hint if something's missing at runtime (no secrets printed)
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  // eslint-disable-next-line no-console
+  console.error('[supabase] Missing env vars at runtime', {
+    hasUrl: !!SUPABASE_URL,
+    hasAnon: !!SUPABASE_ANON_KEY,
+  });
+}
+
+/**
+ * Create a client and FORCE the apikey header on every request (auth/rest/storage).
+ * This prevents "No API key found" even if some env wiring differs in Preview.
+ */
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: { persistSession: true, autoRefreshToken: true },
+  global: {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+    },
+  },
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+  },
 });
 
 
