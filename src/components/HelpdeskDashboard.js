@@ -24,8 +24,9 @@ export default function HelpdeskDashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [rows, setRows] = useState([]);        // normalized assignment+report rows
+  const [rows, setRows] = useState([]);        // normalized assignment + report fields
   const [contractors, setContractors] = useState([]);
+  const [rejectedMap, setRejectedMap] = useState(new Set()); // keys: `${assignment_id}:${contractor_id}`
 
   const [filterStatus, setFilterStatus] = useState('all');
   const [q, setQ] = useState('');
@@ -40,13 +41,22 @@ export default function HelpdeskDashboard() {
     async function boot() {
       setLoading(true);
       try {
+        // Load open assignments + report details, contractors, and prior rejections
         const [assignments, contractorList] = await Promise.all([
           fetchOpenAssignmentsWithReportDetails(),
           fetchContractors()
         ]);
+
+        let rejSet = new Set();
+        if (assignments.length) {
+          const assignmentIds = assignments.map(a => a.id);
+          rejSet = await fetchRejectionsForAssignments(assignmentIds);
+        }
+
         if (!mounted) return;
         setRows(assignments);
         setContractors(contractorList);
+        setRejectedMap(rejSet);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -56,7 +66,7 @@ export default function HelpdeskDashboard() {
   }, []);
 
   async function fetchContractors() {
-    // contractors table per your schema (not profiles)
+    // contractors table per your schema
     const { data, error } = await supabase
       .from('contractors')
       .select('id, full_name, email, phone, services_provided')
@@ -69,14 +79,15 @@ export default function HelpdeskDashboard() {
       name: c.full_name || (c.email?.split('@')[0]) || 'Contractor',
       email: c.email,
       phone: c.phone || '',
-      services: Array.isArray(c.services_provided) ? c.services_provided : [],
+      // ensure array
+      services: Array.isArray(c.services_provided) ? c.services_provided.map(String) : [],
     }));
   }
 
   /**
-   * Load from helpdesk_assignments (anything not completed).
-   * Prefer a PostgREST join into maintenance_reports via FK on report_id.
-   * Fallback to a 2-step fetch if join isn't configured for some reason.
+   * Load open helpdesk assignments, joined with maintenance_reports to get
+   * title/description/property_id/created_at/urgency/category.
+   * Falls back to 2-step fetch if needed.
    */
   async function fetchOpenAssignmentsWithReportDetails() {
     const joined = await supabase
@@ -90,6 +101,7 @@ export default function HelpdeskDashboard() {
           property_id,
           created_at,
           urgency,
+          category,
           status
         )
       `)
@@ -97,11 +109,10 @@ export default function HelpdeskDashboard() {
       .order('created_at', { ascending: false });
 
     if (!joined.error && joined.data) {
-      // Normalize both join and non-join (if maintenance_reports is null)
       return joined.data.map(a => shapeRow(a, a.maintenance_reports || null));
     }
 
-    // Fallback: fetch assignments, then fetch reports by report_id
+    // Fallback
     const { data: assigns, error: aErr } = await supabase
       .from('helpdesk_assignments')
       .select('*')
@@ -115,7 +126,7 @@ export default function HelpdeskDashboard() {
     if (reportIds.length) {
       const { data: reports, error: rErr } = await supabase
         .from('maintenance_reports')
-        .select('id, title, description, property_id, created_at, urgency, status')
+        .select('id, title, description, property_id, created_at, urgency, category, status')
         .in('id', reportIds);
       if (!rErr && reports) {
         reportMap = Object.fromEntries(reports.map(r => [r.id, r]));
@@ -131,7 +142,8 @@ export default function HelpdeskDashboard() {
     const description = report?.description ?? a.description ?? '';
     const property_id = report?.property_id ?? a.property_id ?? null;
     const created_at = report?.created_at ?? a.created_at;
-    const urgency = report?.urgency ?? a.urgency ?? 'medium';
+    const urgency = (report?.urgency || a.urgency || 'medium').toString();
+    const category = (report?.category || a.category || '').toString();
 
     return {
       // assignment fields
@@ -150,18 +162,43 @@ export default function HelpdeskDashboard() {
       description,
       property_id,
       urgency,
+      category,
 
-      // keep originals
+      // originals
       _raw: a,
       _report: report || null,
     };
   }
 
+  async function fetchRejectionsForAssignments(assignmentIds) {
+    // Load prior rejections, so we can disable those contractors for those assignments
+    const { data, error } = await supabase
+      .from('contractor_responses')
+      .select('assignment_id, contractor_id, response')
+      .in('assignment_id', assignmentIds);
+
+    const set = new Set();
+    if (!error && data) {
+      for (const r of data) {
+        if (r.response === 'rejected' && r.assignment_id && r.contractor_id) {
+          set.add(`${r.assignment_id}:${r.contractor_id}`);
+        }
+      }
+    }
+    return set;
+  }
+
   async function refresh() {
     setRefreshing(true);
     try {
-      const data = await fetchOpenAssignmentsWithReportDetails();
-      setRows(data);
+      const assignments = await fetchOpenAssignmentsWithReportDetails();
+      let rejSet = new Set();
+      if (assignments.length) {
+        const assignmentIds = assignments.map(a => a.id);
+        rejSet = await fetchRejectionsForAssignments(assignmentIds);
+      }
+      setRows(assignments);
+      setRejectedMap(rejSet);
     } finally {
       setRefreshing(false);
     }
@@ -179,8 +216,42 @@ export default function HelpdeskDashboard() {
     setSelectedContractorId('');
   }
 
+  // Helper: is contractor eligible for this assignment?
+  function isEligibleForCategory(contractor, category) {
+    if (!category) return true; // if category missing, don't block assignment
+    const list = contractor.services.map(s => s.toLowerCase().trim());
+    return list.includes(category.toLowerCase().trim());
+  }
+
+  function wasRejectedBefore(assignmentId, contractorId) {
+    return rejectedMap.has(`${assignmentId}:${contractorId}`);
+  }
+
+  // Build option model for the select, with disabled flags and reason
+  function getContractorOptionsFor(item) {
+    return contractors.map(c => {
+      const inCategory = isEligibleForCategory(c, item.category);
+      const rejected = wasRejectedBefore(item.id, c.id);
+      const disabled = !inCategory || rejected;
+      const reason = rejected ? 'refused' : (!inCategory ? 'service-mismatch' : null);
+      return { ...c, disabled, reason };
+    });
+  }
+
   async function assignContractor() {
     if (!selected || !selectedContractorId) return;
+    const chosen = contractors.find(c => c.id === selectedContractorId);
+    // Fail-safe: block if not eligible
+    if (chosen && !isEligibleForCategory(chosen, selected.category)) {
+      alert('This contractor does not provide the required service/category.');
+      return;
+    }
+    // Fail-safe: block if previously rejected
+    if (wasRejectedBefore(selected.id, selectedContractorId)) {
+      alert('This contractor already refused this assignment.');
+      return;
+    }
+
     setSavingAssign(true);
     try {
       const nextCount = (selected.reassignment_count ?? 0) + 1;
@@ -314,10 +385,16 @@ export default function HelpdeskDashboard() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h3 className="text-lg font-semibold">{item.title}</h3>
-                    <div className="mt-1 flex items-center gap-2 text-xs text-slate-300">
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-300">
                       <Badge status={item.status} />
                       <span className="opacity-60">•</span>
-                      <span className="uppercase tracking-wide">Urgency: {item.urgency}</span>
+                      <span>Urgency: <span className="uppercase tracking-wide">{item.urgency}</span></span>
+                      {item.category && (
+                        <>
+                          <span className="opacity-60">•</span>
+                          <span>Category: {item.category}</span>
+                        </>
+                      )}
                       {item.property_id && (
                         <>
                           <span className="opacity-60">•</span>
@@ -385,6 +462,8 @@ export default function HelpdeskDashboard() {
               <div className="mt-4 space-y-1 text-sm">
                 <div className="text-slate-300">Assignment ID: <span className="text-white font-medium">{selected.id}</span></div>
                 <div className="text-slate-300">Ticket: <span className="text-white font-medium">{selected.title}</span></div>
+                <div className="text-slate-300">Category: {selected.category || '—'}</div>
+                <div className="text-slate-300">Urgency: {selected.urgency}</div>
                 <div className="text-slate-300">Current status: <Badge status={selected.status} /></div>
                 <div className="text-slate-300">
                   Current contractor:{' '}
@@ -404,9 +483,11 @@ export default function HelpdeskDashboard() {
                   onChange={(e) => setSelectedContractorId(e.target.value)}
                 >
                   <option value="">— Select —</option>
-                  {contractors.map(c => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} — {c.email}{c.phone ? ` (${c.phone})` : ''}
+                  {getContractorOptionsFor(selected).map(opt => (
+                    <option key={opt.id} value={opt.id} disabled={opt.disabled}>
+                      {opt.name} — {opt.email}
+                      {opt.phone ? ` (${opt.phone})` : ''}
+                      {opt.reason === 'refused' ? ' — refused' : opt.reason === 'service-mismatch' ? ' — unavailable for category' : ''}
                     </option>
                   ))}
                 </select>
@@ -424,6 +505,10 @@ export default function HelpdeskDashboard() {
                   {savingAssign ? 'Assigning…' : 'Assign contractor'}
                 </button>
               </div>
+
+              <p className="mt-4 text-xs text-slate-400">
+                Only contractors matching the ticket’s category are selectable. Contractors who previously refused this assignment are disabled.
+              </p>
             </div>
           </div>
         </div>
