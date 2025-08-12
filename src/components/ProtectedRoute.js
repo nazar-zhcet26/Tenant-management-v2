@@ -1,69 +1,79 @@
 // src/components/ProtectedRoute.js
-import React from 'react';
-import { Navigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
+import { supabase } from '../supabase';
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 /**
  * Usage:
- * <ProtectedRoute session={session} role={role} allowedRole="helpdesk">
- *   <HelpdeskDashboard />
- * </ProtectedRoute>
- *
- * Behavior:
- * - If no session -> send to /login (tenant/landlord entry point).
- *   (Your team members enter via /team-login?role=..., which you link from MaintenanceLanding.)
- * - If session exists but role hasn't resolved yet (null/undefined) -> show loader (avoid redirect loop).
- * - If allowedRole is set and doesn't match -> send to a safe landing (/ or /maintenance-portal).
- * - Otherwise -> render children.
+ * <ProtectedRoute allowed={['tenant']}     fallback="/login">...</ProtectedRoute>
+ * <ProtectedRoute allowed={['landlord']}   fallback="/login">...</ProtectedRoute>
+ * <ProtectedRoute allowed={['helpdesk']}   fallback="/maintenance-login">...</ProtectedRoute>
+ * <ProtectedRoute allowed={['contractor']} fallback="/maintenance-login">...</ProtectedRoute>
  */
-export default function ProtectedRoute({
-  session,
-  role,
-  allowedRole,
-  children
-}) {
-  // 1) Not logged in at all → go to tenant/landlord login
-  if (!session) {
-    return <Navigate to="/login" replace />;
-  }
+export default function ProtectedRoute({ allowed = [], fallback = '/login', children }) {
+  const [status, setStatus] = useState('checking'); // 'checking' | 'ok' | 'noauth' | 'forbidden'
+  const location = useLocation();
 
-  // 2) Session is present, but role hasn't resolved yet (App.js still fetching profiles)
-  // Treat both null and undefined as "loading" to be safe.
-  if (allowedRole && (role === null || typeof role === 'undefined')) {
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      // briefly poll for a session (handles just-logged-in race)
+      let { data } = await supabase.auth.getSession();
+      let session = data?.session || null;
+      for (let i = 0; !session && i < 12; i++) { // ~3s max
+        await sleep(250);
+        ({ data } = await supabase.auth.getSession());
+        session = data?.session || null;
+      }
+      if (!alive) return;
+
+      if (!session) return setStatus('noauth');
+
+      const role = String(session.user?.user_metadata?.role || '').toLowerCase();
+      if (allowed.length && !allowed.includes(role)) return setStatus('forbidden');
+
+      setStatus('ok');
+    })();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
+      if (!alive) return;
+      if (!session) setStatus('noauth');
+    });
+
+    return () => {
+      alive = false;
+      sub?.subscription?.unsubscribe?.();
+    };
+  }, [allowed]);
+
+  if (status === 'checking') {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950">
-        <div className="flex flex-col items-center gap-4 text-white">
-          <svg
-            className="animate-spin h-10 w-10"
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-          >
-            <circle
-              className="opacity-25"
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              strokeWidth="4"
-            />
-            <path
-              className="opacity-75"
-              fill="currentColor"
-              d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-            />
-          </svg>
-          <p className="text-sm text-slate-300">Checking your access…</p>
-        </div>
+      <div className="min-h-screen grid place-items-center bg-slate-950 text-slate-200">
+        <div className="animate-pulse">Checking your access…</div>
       </div>
     );
   }
 
-  // 3) Logged in, but wrong role → send them to a neutral place
-  // You can switch this to "/maintenance-portal" if you prefer for team users.
-  if (allowedRole && role !== allowedRole) {
-    return <Navigate to="/" replace />;
+  if (status === 'noauth') {
+    // choose which role to hint on the login page
+    const roleQuery =
+      allowed.includes('landlord') ? 'landlord' :
+      allowed.includes('helpdesk') ? 'helpdesk' :
+      allowed.includes('contractor') ? 'contractor' :
+      'tenant';
+    return <Navigate to={`${fallback}?role=${roleQuery}`} state={{ from: location }} replace />;
   }
 
-  // 4) Authorized → render protected content
+  if (status === 'forbidden') {
+    return (
+      <div className="min-h-screen grid place-items-center bg-slate-950 text-red-300">
+        You don’t have access to this page.
+      </div>
+    );
+  }
+
   return children;
 }
