@@ -5,11 +5,28 @@ import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '../supabase';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Decode JWT payload (no lib needed)
+function decodeJwtPayload(token) {
+  try {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const json = decodeURIComponent(
+      atob(base64)
+        .split('')
+        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+    return JSON.parse(json);
+  } catch {
+    return {};
+  }
+}
+
 /**
- * Manual auth fallback: if supabase-js signIn promise is slow to settle,
- * call Auth endpoint directly and then setSession().
+ * Auth directly against Supabase Auth REST and return the JSON.
+ * We will route immediately using the JWT payload (no DB calls).
  */
-async function manualAuth(email, password) {
+async function authViaRest(email, password) {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     throw new Error('Auth configuration missing.');
   }
@@ -21,19 +38,14 @@ async function manualAuth(email, password) {
     },
     body: JSON.stringify({ email, password }),
   });
+
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(
       data?.error_description || data?.message || `Auth error ${res.status}`
     );
   }
-  // Force the session into the SDK
-  const { error } = await supabase.auth.setSession({
-    access_token: data.access_token,
-    refresh_token: data.refresh_token,
-  });
-  if (error) throw error;
-  return data;
+  return data; // { access_token, refresh_token, user, ... }
 }
 
 export default function Login() {
@@ -56,86 +68,50 @@ export default function Login() {
     setLoading(true);
 
     try {
-      // Start normal sign-in, but don’t rely on it to resolve on time
-      const signInP = supabase.auth.signInWithPassword({ email, password });
-      let settled = false;
-      let signInErr = null;
-      signInP.then(({ error }) => { settled = true; signInErr = error || null; })
-             .catch((e) => { settled = true; signInErr = e; });
+      // 1) Authenticate via REST (this is what your Network shows returning 200)
+      const data = await authViaRest(email, password);
 
-      // Poll for a session while sign-in is in flight
-      let session = null;
-      for (let i = 0; i < 24; i++) { // ~6s
-        const { data } = await supabase.auth.getSession();
-        session = data?.session || null;
-        if (session) break;
-        if (settled && signInErr) break;
-        await sleep(250);
-      }
-
-      // If SDK already failed, surface it
-      if (settled && signInErr) {
-        throw (signInErr instanceof Error
-          ? signInErr
-          : new Error(signInErr?.message || 'Login failed'));
-      }
-
-      // Still no session? brief grace, then manual token fallback
-      if (!session) {
-        await Promise.race([signInP, sleep(1500)]);
-        const again = await supabase.auth.getSession();
-        session = again?.data?.session || null;
-
-        if (!session) {
-          await manualAuth(email, password);
-          const after = await supabase.auth.getSession();
-          session = after?.data?.session || null;
-        }
-      }
-
-      if (!session) throw new Error('Login did not complete. Please try again.');
-
-      // ✅ Route using the JWT’s user_metadata.role — no DB calls here
+      // 2) Read role directly from the JWT payload (no /rest/v1 calls)
+      const payload = decodeJwtPayload(data.access_token);
       const metaRole = String(
-        session.user?.user_metadata?.role || ''
+        payload?.user_metadata?.role || payload?.role || ''
       ).toLowerCase();
 
-      if (metaRole === 'tenant') {
-        // optional: guard that this page is tenant-only if URL says landlord
-        if (roleFromQuery === 'landlord') {
-          await supabase.auth.signOut();
-          throw new Error('This account is a Tenant. Open the landlord login.');
-        }
+      // 3) Route immediately by role (UI never waits on SDK)
+      if (metaRole === 'tenant' || (!metaRole && roleFromQuery === 'tenant')) {
         navigate('/report', { replace: true });
-        return;
-      }
-
-      if (metaRole === 'landlord') {
-        if (roleFromQuery === 'tenant') {
-          await supabase.auth.signOut();
-          throw new Error('This account is a Landlord. Open the tenant login.');
-        }
+      } else if (
+        metaRole === 'landlord' ||
+        (!metaRole && roleFromQuery === 'landlord')
+      ) {
         navigate('/dashboard', { replace: true });
-        return;
+      } else {
+        throw new Error(
+          'This account is not permitted on this login page. Use the correct portal.'
+        );
       }
 
-      // If metadata doesn’t have a role, we can default based on URL
-      if (roleFromQuery === 'tenant') {
-        navigate('/report', { replace: true });
-        return;
-      }
-      if (roleFromQuery === 'landlord') {
-        navigate('/dashboard', { replace: true });
-        return;
-      }
-
-      // Anything else is not allowed on this page
-      await supabase.auth.signOut();
-      throw new Error('Unsupported account for this login page.');
+      // 4) In the background, hydrate supabase-js session so the next pages work
+      // (don’t block UI if this takes time)
+      supabase.auth
+        .setSession({
+          access_token: data.access_token,
+          refresh_token: data.refresh_token,
+        })
+        .catch(() => {})
+        .then(async () => {
+          // tiny confirmation loop (optional, non-blocking)
+          for (let i = 0; i < 8; i++) {
+            const { data: s } = await supabase.auth.getSession();
+            if (s?.session) break;
+            await sleep(150);
+          }
+        });
     } catch (e) {
       console.error('[login]', e);
       setErr(e.message || 'Unexpected error. Please try again.');
     } finally {
+      // Always stop the spinner even if navigation already happened
       setLoading(false);
     }
   };
