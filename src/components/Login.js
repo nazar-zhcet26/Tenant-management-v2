@@ -3,19 +3,29 @@ import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '../supabase';
 
+// small util
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** -------- AUTH: manual fallback (if supabase-js promise stalls) -------- */
 async function manualAuth(email, password) {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) throw new Error('Auth configuration missing.');
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    throw new Error('Auth configuration missing.');
+  }
   const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
     method: 'POST',
-    headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify({ email, password }),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.error_description || data?.message || `Auth error ${res.status}`);
-
-  // force-set session in SDK
+  if (!res.ok) {
+    throw new Error(
+      data?.error_description || data?.message || `Auth error ${res.status}`
+    );
+  }
+  // force-set session in the SDK
   const { error } = await supabase.auth.setSession({
     access_token: data.access_token,
     refresh_token: data.refresh_token,
@@ -24,15 +34,18 @@ async function manualAuth(email, password) {
   return data;
 }
 
-// ---- REST helpers (explicit apikey+bearer) ----
+/** -------- REST helpers: force apikey via header + query param -------- */
 async function getAccessToken() {
   const { data } = await supabase.auth.getSession();
   return data?.session?.access_token || '';
 }
+function qp() {
+  return `apikey=${encodeURIComponent(SUPABASE_ANON_KEY)}`;
+}
 
 async function fetchProfileRole(userId) {
   const token = await getAccessToken();
-  const url = `${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=role`;
+  const url = `${SUPABASE_URL}/rest/v1/profiles?${qp()}&id=eq.${userId}&select=role`;
   const res = await fetch(url, {
     headers: {
       apikey: SUPABASE_ANON_KEY,
@@ -40,13 +53,16 @@ async function fetchProfileRole(userId) {
     },
   });
   const rows = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(rows?.message || `Profile query failed (${res.status})`);
+  if (!res.ok) {
+    throw new Error(rows?.message || `Profile query failed (${res.status})`);
+  }
   return Array.isArray(rows) && rows.length ? rows[0]?.role || null : null;
 }
 
 async function insertProfile({ id, email, full_name, role }) {
   const token = await getAccessToken();
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/profiles`, {
+  const url = `${SUPABASE_URL}/rest/v1/profiles?${qp()}`;
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
       apikey: SUPABASE_ANON_KEY,
@@ -64,7 +80,8 @@ async function insertProfile({ id, email, full_name, role }) {
 
 async function updateProfileRole(id, role) {
   const token = await getAccessToken();
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${id}`, {
+  const url = `${SUPABASE_URL}/rest/v1/profiles?${qp()}&id=eq.${id}`;
+  const res = await fetch(url, {
     method: 'PATCH',
     headers: {
       apikey: SUPABASE_ANON_KEY,
@@ -80,6 +97,7 @@ async function updateProfileRole(id, role) {
   }
 }
 
+/** ------------------------------- Component ------------------------------- */
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPass] = useState('');
@@ -88,7 +106,7 @@ export default function Login() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  // ONLY tenant | landlord here
+  // This page is ONLY for tenants & landlords
   const roleFromQuery = useMemo(() => {
     const r = (searchParams.get('role') || 'tenant').toLowerCase();
     return r === 'tenant' || r === 'landlord' ? r : 'tenant';
@@ -100,14 +118,22 @@ export default function Login() {
     setLoading(true);
 
     try {
-      // 1) SDK sign-in started (don’t rely on it finishing)
+      // Start SDK sign-in, but don’t rely on it to resolve on time
       const signInP = supabase.auth.signInWithPassword({ email, password });
+
       let signInSettled = false;
       let signInErr = null;
-      signInP.then(({ error }) => { signInSettled = true; signInErr = error || null; })
-             .catch((e) => { signInSettled = true; signInErr = e; });
+      signInP
+        .then(({ error }) => {
+          signInSettled = true;
+          signInErr = error || null;
+        })
+        .catch((e) => {
+          signInSettled = true;
+          signInErr = e;
+        });
 
-      // 2) Poll for a session (~6s)
+      // Poll for a session (~6s) while sign-in runs
       let session = null;
       for (let i = 0; i < 24; i++) {
         const { data } = await supabase.auth.getSession();
@@ -117,53 +143,66 @@ export default function Login() {
         await sleep(250);
       }
 
-      // 3) If SDK failed, throw; if still no session, do manual fallback
+      // If SDK failed, surface it
       if (signInSettled && signInErr) {
-        throw (signInErr instanceof Error ? signInErr : new Error(signInErr?.message || 'Login failed'));
+        throw (signInErr instanceof Error
+          ? signInErr
+          : new Error(signInErr?.message || 'Login failed'));
       }
+
+      // Still no session? brief grace, then manual token fallback
       if (!session) {
         await Promise.race([signInP, sleep(1500)]);
-        const again = await supabase.auth.getSession();
-        session = again?.data?.session || null;
+        const { data } = await supabase.auth.getSession();
+        session = data?.session || null;
+
         if (!session) {
           await manualAuth(email, password); // sets session
-          const after = await supabase.auth.getSession();
-          session = after?.data?.session || null;
+          const again = await supabase.auth.getSession();
+          session = again?.data?.session || null;
         }
       }
+
       if (!session) throw new Error('Login did not complete. Please try again.');
 
-      // 4) Ensure we have a tenant/landlord profile (via REST so apikey is guaranteed)
+      // Fetch (or backfill) tenant/landlord profile via REST (explicit apikey)
       const userId = session.user.id;
       const userEmail = session.user.email || email;
+
       let role = await fetchProfileRole(userId);
 
       if (!role) {
-        // create or backfill role based on the URL (first login)
         const full_name = session.user.user_metadata?.full_name || '';
         try {
-          await insertProfile({ id: userId, email: userEmail, full_name, role: roleFromQuery });
+          await insertProfile({
+            id: userId,
+            email: userEmail,
+            full_name,
+            role: roleFromQuery,
+          });
           role = roleFromQuery;
         } catch {
-          // profile might exist but role empty — try updating
+          // profile exists but role missing → update
           await updateProfileRole(userId, roleFromQuery);
           role = roleFromQuery;
         }
       }
 
-      // 5) Hard stop: this page is only for tenant/landlord
+      // Hard stop: this page is only for tenant/landlord
       if (role !== 'tenant' && role !== 'landlord') {
         await supabase.auth.signOut();
-        throw new Error('This account is for the Maintenance Portal. Use the Helpdesk/Contractor login.');
+        throw new Error(
+          'This account is for the Maintenance Portal. Use the Helpdesk/Contractor login.'
+        );
       }
 
-      // Optional: enforce URL role
+      // Optional UX guard: enforce URL role
       if (roleFromQuery && role !== roleFromQuery) {
         await supabase.auth.signOut();
         throw new Error(`This account is a ${role}. Open the correct login page.`);
       }
 
-      // 6) Route
+      // Route
       if (role === 'tenant') navigate('/report', { replace: true });
       else navigate('/dashboard', { replace: true }); // landlord
     } catch (e) {
@@ -176,7 +215,10 @@ export default function Login() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-violet-900 to-fuchsia-900 p-6">
-      <form onSubmit={handleLogin} className="w-full max-w-sm space-y-4 bg-white/10 rounded-2xl p-6 border border-white/20">
+      <form
+        onSubmit={handleLogin}
+        className="w-full max-w-sm space-y-4 bg-white/10 rounded-2xl p-6 border border-white/20"
+      >
         <h1 className="text-xl font-semibold text-white">
           Log in as {roleFromQuery[0].toUpperCase() + roleFromQuery.slice(1)}
         </h1>
@@ -213,7 +255,9 @@ export default function Login() {
           type="submit"
           disabled={loading}
           className={`w-full py-3 font-semibold rounded-lg transition ${
-            loading ? 'bg-gray-600 cursor-not-allowed' : 'bg-white text-purple-900 hover:bg-violet-100'
+            loading
+              ? 'bg-gray-600 cursor-not-allowed'
+              : 'bg-white text-purple-900 hover:bg-violet-100'
           }`}
         >
           {loading ? 'Logging in…' : 'Log in'}
@@ -221,7 +265,10 @@ export default function Login() {
 
         {roleFromQuery === 'tenant' && (
           <div className="text-xs text-slate-200">
-            Need an account? <a href="/signup?role=tenant" className="underline">Sign up</a>
+            Need an account?{' '}
+            <a href="/signup?role=tenant" className="underline">
+              Sign up
+            </a>
           </div>
         )}
       </form>
