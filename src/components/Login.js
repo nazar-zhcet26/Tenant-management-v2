@@ -1,7 +1,7 @@
 // src/components/Login.js
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { supabase } from './supabase';
+import { supabase } from '../supabase';
 
 // tiny helper for polling
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -155,3 +155,4 @@ export default function Login() {
     </div>
   );
 }
+
