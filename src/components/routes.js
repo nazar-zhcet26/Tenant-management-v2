@@ -6,20 +6,19 @@ import LandingPage         from './LandingPage';
 import Login               from './Login';
 import Signup              from './Signup';
 import CheckYourEmail      from './CheckYourEmail';
-import MaintenanceReporter from './MaintenanceReporter';
-import LandlordDashboard   from './LandlordDashboard';
-import HelpdeskDashboard   from './HelpdeskDashboard';
-import ContractorDashboard from './ContractorDashboard';
-import MaintenanceLanding  from './MaintenanceLanding';
-import LoginTeam           from './LoginTeam';
-import ProtectedRoute      from './ProtectedRoute';
-import TenantReports       from './TenantReports';
 
-/**
- * AppRoutes expects `session` and `role` props from App.js
- *   <AppRoutes session={session} role={role} />
- */
-export default function AppRoutes({ session, role }) {
+import MaintenanceReporter from './MaintenanceReporter';     // tenant
+import TenantReports       from './TenantReports';           // tenant
+import LandlordDashboard   from './LandlordDashboard';       // landlord
+
+import MaintenanceLanding  from './MaintenanceLanding';      // maintenance portal splash
+import LoginTeam           from './LoginTeam';               // maintenance login
+import HelpdeskDashboard   from './HelpdeskDashboard';       // helpdesk
+import ContractorDashboard from './ContractorDashboard';     // contractor
+
+import ProtectedRoute      from './ProtectedRoute';
+
+export default function AppRoutes() {
   return (
     <Routes>
       {/* Public: default landing for tenants & landlords */}
@@ -34,7 +33,7 @@ export default function AppRoutes({ session, role }) {
       <Route
         path="/report"
         element={
-          <ProtectedRoute session={session} role={role} allowedRole="tenant">
+          <ProtectedRoute allowed={['tenant']} fallback="/login">
             <MaintenanceReporter />
           </ProtectedRoute>
         }
@@ -42,7 +41,7 @@ export default function AppRoutes({ session, role }) {
       <Route
         path="/my-reports"
         element={
-          <ProtectedRoute session={session} role={role} allowedRole="tenant">
+          <ProtectedRoute allowed={['tenant']} fallback="/login">
             <TenantReports />
           </ProtectedRoute>
         }
@@ -52,7 +51,7 @@ export default function AppRoutes({ session, role }) {
       <Route
         path="/dashboard"
         element={
-          <ProtectedRoute session={session} role={role} allowedRole="landlord">
+          <ProtectedRoute allowed={['landlord']} fallback="/login">
             <LandlordDashboard />
           </ProtectedRoute>
         }
@@ -66,7 +65,7 @@ export default function AppRoutes({ session, role }) {
       <Route
         path="/helpdesk-dashboard"
         element={
-          <ProtectedRoute session={session} role={role} allowedRole="helpdesk">
+          <ProtectedRoute allowed={['helpdesk']} fallback="/maintenance-login">
             <HelpdeskDashboard />
           </ProtectedRoute>
         }
@@ -76,7 +75,7 @@ export default function AppRoutes({ session, role }) {
       <Route
         path="/contractor-dashboard"
         element={
-          <ProtectedRoute session={session} role={role} allowedRole="contractor">
+          <ProtectedRoute allowed={['contractor']} fallback="/maintenance-login">
             <ContractorDashboard />
           </ProtectedRoute>
         }
