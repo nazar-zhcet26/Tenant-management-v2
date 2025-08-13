@@ -1,12 +1,10 @@
-// ContractorDashboard.js (fixed)
-// - Removes .clone() usage (Supabase query builders don't support it)
-// - Resolves contractor by lowercase email
-// - Accept / Reject / Final Report flows
-// - Slightly safer Set state updates
+// ContractorDashboard.js (fixed + dark theme wrapper)
+// - Lowercase email resolution
+// - Independent Supabase queries (no .clone())
+// - Dark background + container to match Helpdesk styling
 
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-// Adjust import to your project structure
-import { supabase } from "../supabase";
+import { supabase } from "../supabaseClient"; // adjust path if needed
 
 export default function ContractorDashboard() {
   const [session, setSession] = useState(null);
@@ -14,7 +12,7 @@ export default function ContractorDashboard() {
   const [me, setMe] = useState(null); // contractor row
   const [errorMsg, setErrorMsg] = useState("");
 
-  const [pending, setPending] = useState([]);   // status = 'assigned' (awaiting accept/reject)
+  const [pending, setPending] = useState([]);   // status = 'assigned'
   const [active, setActive] = useState([]);     // status = 'accepted'
   const [history, setHistory] = useState([]);   // status in ('rejected','completed')
 
@@ -45,7 +43,7 @@ export default function ContractorDashboard() {
       const { data, error } = await supabase
         .from("contractors")
         .select("id, full_name, email, phone, services_provided")
-        .eq("email", emailLower) // DB normalized to lowercase recommended
+        .eq("email", emailLower)
         .single();
 
       if (cancelled) return;
@@ -76,7 +74,6 @@ export default function ContractorDashboard() {
   const loadAssignments = useCallback(async () => {
     if (!me?.id) return;
 
-    // Build each query independently (no .clone())
     const qSelect = `id, status, report_id, assigned_at, response_at, reassignment_count,
       maintenance_reports (
         id, title, description, category, urgency, location, address, created_at, updated_at
@@ -110,9 +107,7 @@ export default function ContractorDashboard() {
     if (!historyRes.error) setHistory(historyRes.data ?? []);
   }, [me?.id]);
 
-  useEffect(() => {
-    if (me?.id) loadAssignments();
-  }, [me?.id, loadAssignments]);
+  useEffect(() => { if (me?.id) loadAssignments(); }, [me?.id, loadAssignments]);
 
   // --- actions ---
   const acceptAssignment = async (assignment) => {
@@ -189,11 +184,7 @@ export default function ContractorDashboard() {
     try {
       const { error: frErr } = await supabase
         .from("contractor_final_reports")
-        .insert({
-          assignment_id: assignmentId,
-          contractor_id: me.id,
-          report_text: finalReportText.trim(),
-        });
+        .insert({ assignment_id: assignmentId, contractor_id: me.id, report_text: finalReportText.trim() });
       if (frErr) throw frErr;
 
       const now = new Date().toISOString();
@@ -249,95 +240,100 @@ export default function ContractorDashboard() {
     </div>
   );
 
-  if (loading) return <div className="p-6 text-white/70">Loading your contractor dashboard…</div>;
+  if (loading) return (
+    <div className="min-h-screen bg-gradient-to-b from-zinc-950 via-zinc-950 to-black text-white">
+      <div className="mx-auto w-full max-w-7xl p-6 text-white/70">Loading your contractor dashboard…</div>
+    </div>
+  );
 
-  if (errorMsg) {
-    return (
-      <div className="p-6">
+  if (errorMsg) return (
+    <div className="min-h-screen bg-gradient-to-b from-zinc-950 via-zinc-950 to-black text-white">
+      <div className="mx-auto w-full max-w-7xl p-6">
         <div className="text-red-300 bg-red-900/20 border border-red-800 rounded-xl p-4">{errorMsg}</div>
       </div>
-    );
-  }
+    </div>
+  );
 
   return (
-    <div className="p-6 text-white">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-semibold">Contractor Dashboard</h1>
-        <button onClick={refresh} className="px-3 py-2 rounded-xl border border-white/10 hover:bg-white/10">Refresh</button>
-      </div>
+    <div className="min-h-screen bg-gradient-to-b from-zinc-950 via-zinc-950 to-black text-white">
+      <div className="mx-auto w-full max-w-7xl p-6">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-semibold">Contractor Dashboard</h1>
+          <button onClick={refresh} className="px-3 py-2 rounded-xl border border-white/10 hover:bg-white/10">Refresh</button>
+        </div>
 
-      {/* Pending (assigned, needs response) */}
-      <Section title="Pending Assignments" count={pending.length}>
-        {pending.length === 0 && <div className="text-white/50">No pending assignments.</div>}
-        {pending.map((a) => (
-          <Card
-            key={a.id}
-            a={a}
-            actions={
-              <>
-                <button onClick={() => acceptAssignment(a)} disabled={busyIds.has(a.id)} className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60">
-                  {busyIds.has(a.id) ? "Accepting…" : "Accept"}
-                </button>
-                <button onClick={() => rejectAssignment(a)} disabled={busyIds.has(a.id)} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-60">
-                  {busyIds.has(a.id) ? "Rejecting…" : "Reject"}
-                </button>
-              </>
-            }
-          />
-        ))}
-      </Section>
-
-      {/* Active (accepted) */}
-      <Section title="Active Assignments" count={active.length}>
-        {active.length === 0 && <div className="text-white/50">No active assignments.</div>}
-        {active.map((a) => (
-          <Card
-            key={a.id}
-            a={a}
-            actions={
-              <>
-                <button onClick={() => openFinalReport(a)} disabled={busyIds.has(a.id)} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60">
-                  Submit Final Report
-                </button>
-              </>
-            }
-          />
-        ))}
-      </Section>
-
-      {/* History */}
-      <Section title="History" count={history.length}>
-        {history.length === 0 && <div className="text-white/50">No history yet.</div>}
-        {history.map((a) => (
-          <Card key={a.id} a={a} actions={<span className="text-white/50">{a.status}</span>} />
-        ))}
-      </Section>
-
-      {/* Final Report Modal */}
-      {finalReportOpenFor && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
-          <div className="w-full max-w-xl rounded-2xl bg-zinc-900 border border-white/10 p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-lg font-semibold">Submit Final Report</h3>
-              <button onClick={() => setFinalReportOpenFor(null)} className="px-2 py-1 text-white/70 hover:text-white">✕</button>
-            </div>
-            <textarea
-              rows={6}
-              value={finalReportText}
-              onChange={(e) => setFinalReportText(e.target.value)}
-              placeholder="Describe what you did, parts replaced, recommendations…"
-              className="w-full rounded-xl bg-black/30 border border-white/10 p-3 outline-none"
+        {/* Pending (assigned, needs response) */}
+        <Section title="Pending Assignments" count={pending.length}>
+          {pending.length === 0 && <div className="text-white/50">No pending assignments.</div>}
+          {pending.map((a) => (
+            <Card
+              key={a.id}
+              a={a}
+              actions={
+                <>
+                  <button onClick={() => acceptAssignment(a)} disabled={busyIds.has(a.id)} className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60">
+                    {busyIds.has(a.id) ? "Accepting…" : "Accept"}
+                  </button>
+                  <button onClick={() => rejectAssignment(a)} disabled={busyIds.has(a.id)} className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-60">
+                    {busyIds.has(a.id) ? "Rejecting…" : "Reject"}
+                  </button>
+                </>
+              }
             />
-            <div className="mt-3 flex items-center justify-end gap-2">
-              <button onClick={() => setFinalReportOpenFor(null)} className="px-3 py-2 rounded-xl border border-white/10 hover:bg-white/10">Cancel</button>
-              <button onClick={() => submitFinalReport(finalReportOpenFor)} disabled={busyIds.has(finalReportOpenFor)} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60">
-                {busyIds.has(finalReportOpenFor) ? "Submitting…" : "Submit"}
-              </button>
+          ))}
+        </Section>
+
+        {/* Active (accepted) */}
+        <Section title="Active Assignments" count={active.length}>
+          {active.length === 0 && <div className="text-white/50">No active assignments.</div>}
+          {active.map((a) => (
+            <Card
+              key={a.id}
+              a={a}
+              actions={
+                <>
+                  <button onClick={() => openFinalReport(a)} disabled={busyIds.has(a.id)} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60">
+                    Submit Final Report
+                  </button>
+                </>
+              }
+            />
+          ))}
+        </Section>
+
+        {/* History */}
+        <Section title="History" count={history.length}>
+          {history.length === 0 && <div className="text-white/50">No history yet.</div>}
+          {history.map((a) => (
+            <Card key={a.id} a={a} actions={<span className="text-white/50">{a.status}</span>} />)
+          )}
+        </Section>
+
+        {/* Final Report Modal */}
+        {finalReportOpenFor && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+            <div className="w-full max-w-xl rounded-2xl bg-zinc-900 border border-white/10 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-semibold">Submit Final Report</h3>
+                <button onClick={() => setFinalReportOpenFor(null)} className="px-2 py-1 text-white/70 hover:text-white">✕</button>
+              </div>
+              <textarea
+                rows={6}
+                value={finalReportText}
+                onChange={(e) => setFinalReportText(e.target.value)}
+                placeholder="Describe what you did, parts replaced, recommendations…"
+                className="w-full rounded-xl bg-black/30 border border-white/10 p-3 outline-none"
+              />
+              <div className="mt-3 flex items-center justify-end gap-2">
+                <button onClick={() => setFinalReportOpenFor(null)} className="px-3 py-2 rounded-xl border border-white/10 hover:bg-white/10">Cancel</button>
+                <button onClick={() => submitFinalReport(finalReportOpenFor)} disabled={busyIds.has(finalReportOpenFor)} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60">
+                  {busyIds.has(finalReportOpenFor) ? "Submitting…" : "Submit"}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
-
