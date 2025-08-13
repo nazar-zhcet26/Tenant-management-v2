@@ -75,7 +75,7 @@ export default function ContractorDashboard() {
     if (!me?.id) return;
 
     const qSelect = `id, status, report_id, assigned_at, response_at, reassignment_count,
-      maintenance_reports (
+      maintenance_reports:report_id (
         id, title, description, category, urgency, location, address, created_at, updated_at
       )`;
 
@@ -122,12 +122,9 @@ export default function ContractorDashboard() {
         .eq("contractor_id", me.id);
       if (upErr) throw upErr;
 
-      const { error: respErr } = await supabase.from("contractor_responses").insert({
-        assignment_id: assignment.id,
-        contractor_id: me.id,
-        response: "accepted",
-        notes: null,
-      });
+      const { error: respErr } = await supabase
+        .from("contractor_responses")
+        .insert({$1}, { returning: 'minimal' });
       if (respErr) throw respErr;
 
       await loadAssignments();
@@ -184,7 +181,7 @@ export default function ContractorDashboard() {
     try {
       const { error: frErr } = await supabase
         .from("contractor_final_reports")
-        .insert({ assignment_id: assignmentId, contractor_id: me.id, report_text: finalReportText.trim() });
+        .insert({$1}, { returning: 'minimal' });
       if (frErr) throw frErr;
 
       const now = new Date().toISOString();
@@ -337,4 +334,3 @@ export default function ContractorDashboard() {
     </div>
   );
 }
-
