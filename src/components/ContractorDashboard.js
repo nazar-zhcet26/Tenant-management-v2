@@ -3,7 +3,7 @@
 // NOTE: Adjust the import path for your Supabase client if needed.
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 // If your client is a default export, change to: import supabase from "../supabaseClient";
-import { supabase } from "../supabaseClient";
+import { supabase } from "../supabase";
 
 export default function ContractorDashboard() {
   const [session, setSession] = useState(null);
@@ -373,3 +373,4 @@ export default function ContractorDashboard() {
     </div>
   );
 }
+
