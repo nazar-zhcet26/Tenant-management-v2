@@ -4,7 +4,7 @@
 // - Dark background + container to match Helpdesk styling
 
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { supabase } from "../supabaseClient"; // adjust path if needed
+import { supabase } from "../supabase"; // adjust path if needed
 
 export default function ContractorDashboard() {
   const [session, setSession] = useState(null);
@@ -337,3 +337,4 @@ export default function ContractorDashboard() {
     </div>
   );
 }
+
