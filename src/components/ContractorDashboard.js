@@ -76,11 +76,13 @@ export default function ContractorDashboard() {
     const email = session?.user?.email;
     if (!email) throw new Error('No authenticated user email found.');
 
-    const { data, error } = await supabase
+    const email = session?.user?.email?.toLowerCase();
+    const { data: me, error } = await supabase
       .from('contractors')
       .select('id, full_name, email, phone, services_provided')
-      .eq('email', email)
+      .eq('email', email)   // now matches normalized DB
       .single();
+
 
     if (error || !data) throw new Error('No matching contractor record found for this account. Contact admin.');
 
@@ -558,3 +560,4 @@ export default function ContractorDashboard() {
     </div>
   );
 }
+
