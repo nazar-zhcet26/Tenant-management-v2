@@ -1,558 +1,371 @@
-// src/components/ContractorDashboard.js
-import React, { useEffect, useMemo, useState } from 'react';
-import { supabase } from '../supabase';
-import { HardHat, Check, X, ClipboardCheck, Search, RefreshCcw, FileText, Loader2 } from 'lucide-react';
-
-const STATUS_COLORS = {
-  assigned: 'bg-blue-600',
-  accepted: 'bg-emerald-600',
-  rejected: 'bg-red-600',
-  completed: 'bg-gray-600',
-};
-
-function Badge({ status }) {
-  const color = STATUS_COLORS[status] || 'bg-slate-600';
-  return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${color} text-white`}>
-      {status?.[0]?.toUpperCase()}{status?.slice(1)}
-    </span>
-  );
-}
+// ContractorDashboard.js
+// Ready-to-drop version with lowercase email resolution + robust loading and actions.
+// NOTE: Adjust the import path for your Supabase client if needed.
+import React, { useEffect, useMemo, useState, useCallback } from "react";
+// If your client is a default export, change to: import supabase from "../supabaseClient";
+import { supabase } from "../supabaseClient";
 
 export default function ContractorDashboard() {
+  const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [me, setMe] = useState(null); // contractor row
+  const [errorMsg, setErrorMsg] = useState("");
 
-  const [contractor, setContractor] = useState(null); // {id, name, email, phone, services}
-  const [rows, setRows] = useState([]);              // assignments for this contractor
+  const [pending, setPending] = useState([]);   // status = 'assigned' (awaiting accept/reject)
+  const [active, setActive] = useState([]);     // status = 'accepted'
+  const [history, setHistory] = useState([]);   // status in ('rejected','completed')
 
-  // No "pending" here:
-  const [filterStatus, setFilterStatus] = useState('open'); // open | assigned | accepted | rejected | completed | all
-  const [q, setQ] = useState('');
+  const [finalReportOpenFor, setFinalReportOpenFor] = useState(null); // assignment id
+  const [finalReportText, setFinalReportText] = useState("");
+  const [busyIds, setBusyIds] = useState(new Set());
 
-  const [actionBusyId, setActionBusyId] = useState(null);
+  const emailLower = useMemo(() => session?.user?.email?.toLowerCase() ?? null, [session]);
 
-  // Accept/Reject notes modal
-  const [respModalOpen, setRespModalOpen] = useState(false);
-  const [respItem, setRespItem] = useState(null);
-  const [respType, setRespType] = useState(null); // 'accepted' | 'rejected'
-  const [respNotes, setRespNotes] = useState('');
-  const [submittingResp, setSubmittingResp] = useState(false);
-
-  // Final report modal
-  const [reportModalOpen, setReportModalOpen] = useState(false);
-  const [selected, setSelected] = useState(null);
-  const [reportText, setReportText] = useState('');
-  const [submittingReport, setSubmittingReport] = useState(false);
-
+  // --- bootstrap session ---
   useEffect(() => {
-    let mounted = true;
-
-    async function boot() {
-      setLoading(true);
-      try {
-        const c = await resolveCurrentContractor();
-        if (!mounted) return;
-        setContractor(c);
-
-        const data = await fetchAssignmentsForContractor(c.id);
-        if (!mounted) return;
-        setRows(data);
-      } catch (e) {
-        console.error(e);
-        alert(e.message || 'Failed to load contractor dashboard.');
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    }
-    boot();
-
-    return () => { mounted = false; };
+    let isMounted = true;
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!isMounted) return;
+      setSession(data.session);
+    })();
+    return () => { isMounted = false; };
   }, []);
 
-  async function resolveCurrentContractor() {
-    const { data: { session }, error: sErr } = await supabase.auth.getSession();
-    if (sErr) throw sErr;
-    const email = session?.user?.email;
-    if (!email) throw new Error('No authenticated user email found.');
+  // --- resolve contractor by lowercase email ---
+  useEffect(() => {
+    if (!emailLower) return;
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      setErrorMsg("");
+      const { data, error } = await supabase
+        .from("contractors")
+        .select("id, full_name, email, phone, services_provided")
+        .eq("email", emailLower) // RLS + DB normalized to lowercase recommended
+        .single();
 
-    const email = session?.user?.email?.toLowerCase();
-    const { data: me, error } = await supabase
-      .from('contractors')
-      .select('id, full_name, email, phone, services_provided')
-      .eq('email', email)   // now matches normalized DB
-      .single();
+      if (cancelled) return;
 
-
-    if (error || !data) throw new Error('No matching contractor record found for this account. Contact admin.');
-
-    return {
-      id: data.id,
-      name: data.full_name || (data.email?.split('@')[0]) || 'Contractor',
-      email: data.email,
-      phone: data.phone || '',
-      services: Array.isArray(data.services_provided) ? data.services_provided.map(String) : [],
-    };
-  }
-
-  async function fetchAssignmentsForContractor(contractorId) {
-    // Only this contractor's assignments, and exclude 'pending' in the query
-    const joined = await supabase
-      .from('helpdesk_assignments')
-      .select(`
-        *,
-        maintenance_reports:maintenance_reports (
-          id,
-          title,
-          description,
-          property_id,
-          created_at,
-          urgency,
-          category
-        )
-      `)
-      .eq('contractor_id', contractorId)
-      .neq('status', 'pending')
-      .order('created_at', { ascending: false });
-
-    if (!joined.error && joined.data) {
-      return joined.data.map(a => shapeRow(a, a.maintenance_reports || null));
-    }
-
-    // Fallback 2-step
-    const { data: assigns, error: aErr } = await supabase
-      .from('helpdesk_assignments')
-      .select('*')
-      .eq('contractor_id', contractorId)
-      .neq('status', 'pending')
-      .order('created_at', { ascending: false });
-    if (aErr) throw aErr;
-
-    const reportIds = Array.from(new Set((assigns || []).map(r => r.report_id).filter(Boolean)));
-    let reportMap = {};
-    if (reportIds.length) {
-      const { data: reports, error: rErr } = await supabase
-        .from('maintenance_reports')
-        .select('id, title, description, property_id, created_at, urgency, category')
-        .in('id', reportIds);
-      if (!rErr && reports) {
-        reportMap = Object.fromEntries(reports.map(r => [r.id, r]));
+      if (error || !data) {
+        setMe(null);
+        setLoading(false);
+        setErrorMsg(
+          "No matching contractor record found for this account. Contact admin."
+        );
+        return;
       }
-    }
-    return (assigns || []).map(a => shapeRow(a, reportMap[a.report_id]));
-  }
 
-  function shapeRow(a, report) {
-    const title = report?.title ?? a.title ?? `Ticket #${a.report_id || a.id}`;
-    const description = report?.description ?? a.description ?? '';
-    const property_id = report?.property_id ?? a.property_id ?? null;
-    const created_at = report?.created_at ?? a.created_at;
-    const urgency = (report?.urgency || a.urgency || 'medium').toString();
-    const category = (report?.category || a.category || '').toString();
+      setMe(data);
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [emailLower]);
 
-    return {
-      id: a.id,
-      report_id: a.report_id ?? null,
-      status: a.status ?? 'assigned',
-      assigned_at: a.assigned_at ?? null,
-      response_at: a.response_at ?? null,
-      created_at,
-      title, description, property_id, urgency, category,
-      _raw: a, _report: report || null,
-    };
-  }
+  // --- load assignments once contractor resolved ---
+  const loadAssignments = useCallback(async () => {
+    if (!me?.id) return;
+    // Pending (assigned, awaiting accept/reject)
+    const qBase = supabase
+      .from("helpdesk_assignments")
+      .select(
+        `id, status, report_id, assigned_at, response_at, reassignment_count,
+         maintenance_reports:report_id (
+           id, title, description, category, urgency, location, address, created_at, updated_at
+         )`
+      )
+      .eq("contractor_id", me.id);
 
-  async function refresh() {
-    if (!contractor) return;
-    setRefreshing(true);
+    const [qPending, qActive, qHistory] = await Promise.all([
+      qBase.clone().eq("status", "assigned").order("assigned_at", { ascending: true }),
+      qBase.clone().eq("status", "accepted").order("response_at", { ascending: true }),
+      qBase
+        .clone()
+        .in("status", ["rejected", "completed"]) 
+        .order("updated_at", { ascending: false }),
+    ]);
+
+    if (!qPending.error) setPending(qPending.data ?? []);
+    if (!qActive.error) setActive(qActive.data ?? []);
+    if (!qHistory.error) setHistory(qHistory.data ?? []);
+  }, [me?.id]);
+
+  useEffect(() => {
+    if (me?.id) loadAssignments();
+  }, [me?.id, loadAssignments]);
+
+  // --- actions ---
+  const setBusy = (id, v) => setBusyIds(prev => new Set(v ? prev.add(id) : (prev.delete(id), prev)));
+
+  const acceptAssignment = async (assignment) => {
+    if (!assignment?.id || !me?.id) return;
+    setBusy(assignment.id, true);
     try {
-      const data = await fetchAssignmentsForContractor(contractor.id);
-      setRows(data);
-    } finally {
-      setRefreshing(false);
-    }
-  }
+      const now = new Date().toISOString();
+      const { error: upErr } = await supabase
+        .from("helpdesk_assignments")
+        .update({ status: "accepted", response_at: now, updated_at: now })
+        .eq("id", assignment.id)
+        .eq("contractor_id", me.id);
+      if (upErr) throw upErr;
 
-  function openResponseModal(item, type) {
-    if (item.status !== 'assigned') return; // only from assigned
-    setRespItem(item);
-    setRespType(type); // 'accepted' | 'rejected'
-    setRespNotes('');
-    setRespModalOpen(true);
-  }
-  function closeResponseModal() {
-    setRespModalOpen(false);
-    setRespItem(null);
-    setRespType(null);
-    setRespNotes('');
-  }
+      const { error: respErr } = await supabase.from("contractor_responses").insert({
+        assignment_id: assignment.id,
+        contractor_id: me.id,
+        response: "accepted",
+        notes: null,
+      });
+      if (respErr) throw respErr;
 
-  async function submitResponseWithNotes() {
-    if (!contractor || !respItem || !respType) return;
-    // Require notes on rejection
-    if (respType === 'rejected' && !respNotes.trim()) {
-      alert('Please provide a reason for rejection.');
-      return;
-    }
-    setSubmittingResp(true);
-    setActionBusyId(respItem.id);
-    try {
-      // 1) record response (with notes)
-      const { error: rErr } = await supabase
-        .from('contractor_responses')
-        .insert({
-          assignment_id: respItem.id,
-          contractor_id: contractor.id,
-          response: respType, // 'accepted' | 'rejected'
-          notes: respNotes.trim() || null,
-        });
-      if (rErr) throw rErr;
-
-      // 2) update assignment status + response time
-      const { error: aErr } = await supabase
-        .from('helpdesk_assignments')
-        .update({
-          status: respType,
-          response_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', respItem.id);
-      if (aErr) throw aErr;
-
-      setRows(prev => prev.map(r => r.id === respItem.id ? { ...r, status: respType, response_at: new Date().toISOString() } : r));
-      closeResponseModal();
+      await loadAssignments();
     } catch (e) {
       console.error(e);
-      alert(e.message || 'Failed to submit response.');
+      alert("Failed to accept assignment. Please try again.");
     } finally {
-      setSubmittingResp(false);
-      setActionBusyId(null);
+      setBusy(assignment.id, false);
     }
-  }
+  };
 
-  function openReportModal(item) {
-    if (item.status !== 'accepted') return;
-    setSelected(item);
-    setReportText('');
-    setReportModalOpen(true);
-  }
-  function closeReportModal() {
-    setReportModalOpen(false);
-    setSelected(null);
-    setReportText('');
-  }
+  const rejectAssignment = async (assignment) => {
+    if (!assignment?.id || !me?.id) return;
+    const notes = window.prompt("Please add a short note for the rejection (optional):", "");
+    setBusy(assignment.id, true);
+    try {
+      const now = new Date().toISOString();
+      const { error: upErr } = await supabase
+        .from("helpdesk_assignments")
+        .update({ status: "rejected", response_at: now, updated_at: now })
+        .eq("id", assignment.id)
+        .eq("contractor_id", me.id);
+      if (upErr) throw upErr;
 
-  async function submitFinalReport() {
-    if (!selected || !contractor) return;
-    if (!reportText.trim()) {
-      alert('Please write a brief final report.');
+      const { error: respErr } = await supabase.from("contractor_responses").insert({
+        assignment_id: assignment.id,
+        contractor_id: me.id,
+        response: "rejected",
+        notes: notes || null,
+      });
+      if (respErr) throw respErr;
+
+      await loadAssignments();
+    } catch (e) {
+      console.error(e);
+      alert("Failed to reject assignment. Please try again.");
+    } finally {
+      setBusy(assignment.id, false);
+    }
+  };
+
+  const openFinalReport = (assignment) => {
+    setFinalReportOpenFor(assignment?.id ?? null);
+    setFinalReportText("");
+  };
+
+  const submitFinalReport = async (assignmentId) => {
+    if (!assignmentId || !me?.id) return;
+    if (!finalReportText.trim()) {
+      alert("Please enter a brief final report.");
       return;
     }
-    setSubmittingReport(true);
+    setBusy(assignmentId, true);
     try {
-      // 1) final report
-      const { error: cfrErr } = await supabase
-        .from('contractor_final_reports')
+      const { data: fr, error: frErr } = await supabase
+        .from("contractor_final_reports")
         .insert({
-          assignment_id: selected.id,
-          contractor_id: contractor.id,
-          report_text: reportText.trim(),
-        });
-      if (cfrErr) throw cfrErr;
-
-      // 2) mark completed
-      const { error: updErr } = await supabase
-        .from('helpdesk_assignments')
-        .update({
-          status: 'completed',
-          updated_at: new Date().toISOString(),
+          assignment_id: assignmentId,
+          contractor_id: me.id,
+          report_text: finalReportText.trim(),
         })
-        .eq('id', selected.id);
+        .select("id")
+        .single();
+      if (frErr) throw frErr;
+
+      // Optional: attach files in a separate UI flow (not included here)
+
+      const now = new Date().toISOString();
+      const { data: assignRow, error: updErr } = await supabase
+        .from("helpdesk_assignments")
+        .update({ status: "completed", updated_at: now })
+        .eq("id", assignmentId)
+        .select("report_id")
+        .single();
       if (updErr) throw updErr;
 
-      setRows(prev => prev.map(r => r.id === selected.id ? { ...r, status: 'completed' } : r));
-      closeReportModal();
+      if (assignRow?.report_id) {
+        await supabase
+          .from("maintenance_reports")
+          .update({ status: "completed", updated_at: now })
+          .eq("id", assignRow.report_id);
+      }
+
+      setFinalReportOpenFor(null);
+      setFinalReportText("");
+      await loadAssignments();
     } catch (e) {
       console.error(e);
-      alert(e.message || 'Failed to submit final report.');
+      alert("Failed to submit final report. Please try again.");
     } finally {
-      setSubmittingReport(false);
+      setBusy(assignmentId, false);
     }
+  };
+
+  const refresh = () => {
+    if (me?.id) loadAssignments();
+  };
+
+  // --- UI helpers ---
+  const Section = ({ title, children, count }) => (
+    <div className="mb-8">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-xl font-semibold text-white/90">{title}</h2>
+        <span className="text-sm text-white/50">{count ?? 0}</span>
+      </div>
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">{children}</div>
+    </div>
+  );
+
+  const Card = ({ a, actions }) => (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 shadow-sm">
+      <div className="text-sm text-white/60 mb-1">#{a.id.slice(0, 8)}</div>
+      <div className="font-medium text-white mb-2">{a.maintenance_reports?.title ?? "(No title)"}</div>
+      <div className="text-sm text-white/70 space-y-1">
+        <div><span className="text-white/50">Category:</span> {a.maintenance_reports?.category}</div>
+        <div><span className="text-white/50">Urgency:</span> {a.maintenance_reports?.urgency}</div>
+        <div><span className="text-white/50">Location:</span> {a.maintenance_reports?.address || a.maintenance_reports?.location || "—"}</div>
+      </div>
+      <div className="mt-4 flex gap-2 flex-wrap">
+        {actions}
+      </div>
+    </div>
+  );
+
+  if (loading) {
+    return (
+      <div className="p-6 text-white/70">Loading your contractor dashboard…</div>
+    );
   }
 
-  // Client-side filters (no "pending")
-  const filtered = useMemo(() => {
-    let list = rows;
-    if (filterStatus === 'open') {
-      list = list.filter(r => r.status === 'assigned' || r.status === 'accepted');
-    } else if (filterStatus !== 'all') {
-      list = list.filter(r => r.status === filterStatus);
-    }
-    if (q.trim()) {
-      const t = q.toLowerCase();
-      list = list.filter(r =>
-        (r.title || '').toLowerCase().includes(t) ||
-        (r.description || '').toLowerCase().includes(t) ||
-        (r.category || '').toLowerCase().includes(t)
-      );
-    }
-    return list;
-  }, [rows, filterStatus, q]);
+  if (errorMsg) {
+    return (
+      <div className="p-6">
+        <div className="text-red-300 bg-red-900/20 border border-red-800 rounded-xl p-4">
+          {errorMsg}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white">
-      <header className="border-b border-white/10">
-        <div className="mx-auto max-w-6xl px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <HardHat className="h-6 w-6" />
-            <h1 className="text-xl font-semibold">Contractor Dashboard</h1>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={refresh}
-              disabled={refreshing}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 hover:bg-white/5 disabled:opacity-60"
-            >
-              <RefreshCcw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-              <span>Refresh</span>
-            </button>
-          </div>
-        </div>
-      </header>
+    <div className="p-6 text-white">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-semibold">Contractor Dashboard</h1>
+        <button
+          onClick={refresh}
+          className="px-3 py-2 rounded-xl border border-white/10 hover:bg-white/10"
+        >
+          Refresh
+        </button>
+      </div>
 
-      <main className="mx-auto max-w-6xl px-4 py-6">
-        {!contractor ? (
-          loading ? (
-            <div className="grid place-items-center py-20 text-slate-300">
-              <div className="h-10 w-10 border-2 border-slate-600 border-t-white rounded-full animate-spin" />
-              <p className="mt-3">Resolving contractor account…</p>
-            </div>
-          ) : (
-            <div className="grid place-items-center py-20 text-red-300">
-              <p>Contractor record not found for this account. Contact admin.</p>
-            </div>
-          )
-        ) : (
-          <>
-            {/* Filters */}
-            <div className="flex flex-col md:flex-row md:items-center gap-3 mb-6">
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-slate-300">Status</label>
-                <select
-                  value={filterStatus}
-                  onChange={(e) => setFilterStatus(e.target.value)}
-                  className="bg-white/10 border border-white/10 rounded-lg px-3 py-2 text-sm"
-                >
-                  <option value="open">Open (Assigned/Accepted)</option>
-                  <option value="assigned">Assigned</option>
-                  <option value="accepted">Accepted</option>
-                  <option value="rejected">Rejected</option>
-                  <option value="completed">Completed</option>
-                  <option value="all">All</option>
-                </select>
-              </div>
-
-              <div className="relative flex-1">
-                <input
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
-                  placeholder="Search title, description, or category…"
-                  className="w-full bg-white/10 border border-white/10 rounded-lg pl-9 pr-3 py-2 text-sm placeholder:text-slate-400"
-                />
-                <Search className="absolute left-2 top-2.5 h-4 w-4 text-slate-400" />
-              </div>
-
-              <div className="text-xs text-slate-400">
-                Services: {contractor.services.length ? contractor.services.join(', ') : '—'}
-              </div>
-            </div>
-
-            {/* Content */}
-            {loading ? (
-              <div className="grid place-items-center py-20 text-slate-300">
-                <div className="h-10 w-10 border-2 border-slate-600 border-t-white rounded-full animate-spin" />
-                <p className="mt-3">Loading assignments…</p>
-              </div>
-            ) : filtered.length === 0 ? (
-              <div className="grid place-items-center py-20 text-slate-300">
-                <p>No assignments found.</p>
-              </div>
-            ) : (
-              <ul className="grid md:grid-cols-2 gap-4">
-                {filtered.map(item => {
-                  const canAccept = item.status === 'assigned';
-                  const canReject = item.status === 'assigned';
-                  const canComplete = item.status === 'accepted';
-
-                  return (
-                    <li key={item.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h3 className="text-lg font-semibold">{item.title}</h3>
-                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-300">
-                            <Badge status={item.status} />
-                            <span className="opacity-60">•</span>
-                            <span>Urgency: <span className="uppercase tracking-wide">{item.urgency}</span></span>
-                            {item.category && (
-                              <>
-                                <span className="opacity-60">•</span>
-                                <span>Category: {item.category}</span>
-                              </>
-                            )}
-                            {item.property_id && (
-                              <>
-                                <span className="opacity-60">•</span>
-                                <span>Property #{item.property_id}</span>
-                              </>
-                            )}
-                            <span className="opacity-60">•</span>
-                            <span>{new Date(item.created_at).toLocaleString()}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {item.description && (
-                        <p className="mt-3 text-sm text-slate-200 whitespace-pre-wrap">
-                          {item.description}
-                        </p>
-                      )}
-
-                      <div className="mt-4 flex flex-wrap items-center gap-2">
-                        <button
-                          disabled={!canAccept || actionBusyId === item.id}
-                          onClick={() => openResponseModal(item, 'accepted')}
-                          className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg ${canAccept ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-emerald-900/50 cursor-not-allowed'}`}
-                        >
-                          {actionBusyId === item.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                          Accept
-                        </button>
-
-                        <button
-                          disabled={!canReject || actionBusyId === item.id}
-                          onClick={() => openResponseModal(item, 'rejected')}
-                          className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg ${canReject ? 'bg-red-600 hover:bg-red-700' : 'bg-red-900/50 cursor-not-allowed'}`}
-                        >
-                          {actionBusyId === item.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
-                          Reject
-                        </button>
-
-                        <button
-                          disabled={!canComplete}
-                          onClick={() => openReportModal(item)}
-                          className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg ${canComplete ? 'bg-blue-600 hover:bg-blue-700' : 'bg-blue-900/50 cursor-not-allowed'}`}
-                        >
-                          <ClipboardCheck className="h-4 w-4" />
-                          Submit Final Report
-                        </button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </>
+      {/* Pending (assigned, needs response) */}
+      <Section title="Pending Assignments" count={pending.length}>
+        {pending.length === 0 && (
+          <div className="text-white/50">No pending assignments.</div>
         )}
-      </main>
-
-      {/* Accept/Reject notes modal */}
-      {respModalOpen && respItem && (
-        <div className="fixed inset-0 z-50">
-          <div className="absolute inset-0 bg-black/60" onClick={closeResponseModal} />
-          <div className="absolute inset-0 grid place-items-center p-4">
-            <div className="w-full max-w-lg rounded-2xl bg-slate-900 border border-white/10 p-6">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold flex items-center gap-2">
-                  {respType === 'accepted' ? <Check className="h-5 w-5" /> : <X className="h-5 w-5" />}
-                  {respType === 'accepted' ? 'Accept Assignment' : 'Reject Assignment'}
-                </h2>
-                <button onClick={closeResponseModal} className="p-1 rounded hover:bg-white/10">
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              <div className="mt-3 text-sm text-slate-300">
-                Assignment: <span className="text-white font-medium">{respItem.title}</span>
-              </div>
-
-              <label className="mt-4 block text-sm">
-                <span className="text-slate-300">
-                  {respType === 'accepted' ? 'Optional note' : 'Reason for rejection'}
-                </span>
-                <textarea
-                  className="mt-1 w-full min-h-[120px] bg-white/10 border border-white/10 rounded-lg p-3 text-sm"
-                  value={respNotes}
-                  onChange={(e) => setRespNotes(e.target.value)}
-                  placeholder={respType === 'accepted'
-                    ? 'Add any acceptance note (optional)…'
-                    : 'Please explain why you are rejecting this assignment…'}
-                />
-              </label>
-
-              <div className="mt-6 flex items-center justify-end gap-3">
-                <button onClick={closeResponseModal} className="px-4 py-2 rounded-lg border border-white/10">
-                  Cancel
+        {pending.map((a) => (
+          <Card
+            key={a.id}
+            a={a}
+            actions={
+              <>
+                <button
+                  onClick={() => acceptAssignment(a)}
+                  disabled={busyIds.has(a.id)}
+                  className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60"
+                >
+                  {busyIds.has(a.id) ? "Accepting…" : "Accept"}
                 </button>
                 <button
-                  onClick={submitResponseWithNotes}
-                  disabled={submittingResp || (respType === 'rejected' && !respNotes.trim())}
-                  className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-60 inline-flex items-center gap-2"
+                  onClick={() => rejectAssignment(a)}
+                  disabled={busyIds.has(a.id)}
+                  className="px-3 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-60"
                 >
-                  {submittingResp ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                  Submit
+                  {busyIds.has(a.id) ? "Rejecting…" : "Reject"}
                 </button>
-              </div>
+              </>
+            }
+          />
+        ))}
+      </Section>
+
+      {/* Active (accepted) */}
+      <Section title="Active Assignments" count={active.length}>
+        {active.length === 0 && (
+          <div className="text-white/50">No active assignments.</div>
+        )}
+        {active.map((a) => (
+          <Card
+            key={a.id}
+            a={a}
+            actions={
+              <>
+                <button
+                  onClick={() => openFinalReport(a)}
+                  disabled={busyIds.has(a.id)}
+                  className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60"
+                >
+                  Submit Final Report
+                </button>
+              </>
+            }
+          />
+        ))}
+      </Section>
+
+      {/* History */}
+      <Section title="History" count={history.length}>
+        {history.length === 0 && (
+          <div className="text-white/50">No history yet.</div>
+        )}
+        {history.map((a) => (
+          <Card key={a.id} a={a} actions={<span className="text-white/50">{a.status}</span>} />
+        ))}
+      </Section>
+
+      {/* Final Report Modal */}
+      {finalReportOpenFor && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+          <div className="w-full max-w-xl rounded-2xl bg-zinc-900 border border-white/10 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-semibold">Submit Final Report</h3>
+              <button
+                onClick={() => setFinalReportOpenFor(null)}
+                className="px-2 py-1 text-white/70 hover:text-white"
+              >
+                ✕
+              </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Final report modal */}
-      {reportModalOpen && selected && (
-        <div className="fixed inset-0 z-50">
-          <div className="absolute inset-0 bg-black/60" onClick={closeReportModal} />
-          <div className="absolute inset-0 grid place-items-center p-4">
-            <div className="w-full max-w-lg rounded-2xl bg-slate-900 border border-white/10 p-6">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold flex items-center gap-2">
-                  <FileText className="h-5 w-5" />
-                  Final Report
-                </h2>
-                <button onClick={closeReportModal} className="p-1 rounded hover:bg-white/10">
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              <div className="mt-4 text-sm text-slate-300">
-                Assignment: <span className="text-white font-medium">{selected.title}</span>
-              </div>
-
-              <label className="mt-4 block text-sm">
-                <span className="text-slate-300">Report details</span>
-                <textarea
-                  className="mt-1 w-full min-h-[140px] bg-white/10 border border-white/10 rounded-lg p-3 text-sm"
-                  value={reportText}
-                  onChange={(e) => setReportText(e.target.value)}
-                  placeholder="Describe the work performed, parts used, time on site, etc."
-                />
-              </label>
-
-              <div className="mt-6 flex items-center justify-end gap-3">
-                <button onClick={closeReportModal} className="px-4 py-2 rounded-lg border border-white/10">
-                  Cancel
-                </button>
-                <button
-                  onClick={submitFinalReport}
-                  disabled={submittingReport || !reportText.trim()}
-                  className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-60 inline-flex items-center gap-2"
-                >
-                  {submittingReport ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                  Submit & Complete
-                </button>
-              </div>
-
-              <p className="mt-3 text-xs text-slate-400">
-                Submitting will create a contractor final report and mark the assignment as completed.
-              </p>
+            <textarea
+              rows={6}
+              value={finalReportText}
+              onChange={(e) => setFinalReportText(e.target.value)}
+              placeholder="Describe what you did, parts replaced, recommendations…"
+              className="w-full rounded-xl bg-black/30 border border-white/10 p-3 outline-none"
+            />
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <button
+                onClick={() => setFinalReportOpenFor(null)}
+                className="px-3 py-2 rounded-xl border border-white/10 hover:bg-white/10"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => submitFinalReport(finalReportOpenFor)}
+                disabled={busyIds.has(finalReportOpenFor)}
+                className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60"
+              >
+                {busyIds.has(finalReportOpenFor) ? "Submitting…" : "Submit"}
+              </button>
             </div>
           </div>
         </div>
@@ -560,4 +373,3 @@ export default function ContractorDashboard() {
     </div>
   );
 }
-
