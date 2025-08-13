@@ -102,6 +102,7 @@ export default function HelpdeskDashboard() {
           created_at,
           urgency,
           category,
+           property:property_id ( id, name ),
           status
         )
       `)
@@ -516,3 +517,4 @@ export default function HelpdeskDashboard() {
     </div>
   );
 }
+
