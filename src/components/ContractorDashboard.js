@@ -6,7 +6,7 @@
 
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 // Adjust import to your project structure
-import { supabase } from "../supabaseClient";
+import { supabase } from "../supabase";
 
 export default function ContractorDashboard() {
   const [session, setSession] = useState(null);
@@ -340,3 +340,4 @@ export default function ContractorDashboard() {
     </div>
   );
 }
+
