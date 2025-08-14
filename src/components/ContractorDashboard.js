@@ -1,8 +1,4 @@
-// ContractorDashboard.js (fixed + dark theme wrapper)
-// - Lowercase email resolution
-// - Independent Supabase queries (no .clone())
-// - Dark background + container to match Helpdesk styling
-
+// ContractorDashboard.js — fixed accept flow & final-report insert
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { supabase } from "../supabase"; // adjust path if needed
 
@@ -74,7 +70,7 @@ export default function ContractorDashboard() {
   const loadAssignments = useCallback(async () => {
     if (!me?.id) return;
 
-    const qSelect = `id, status, report_id, assigned_at, response_at, reassignment_count,
+    const qSelect = `id, status, report_id, assigned_at, response_at, reassignment_count, updated_at,
       maintenance_reports:report_id (
         id, title, description, category, urgency, location, address, created_at, updated_at
       )`;
@@ -98,7 +94,7 @@ export default function ContractorDashboard() {
         .from("helpdesk_assignments")
         .select(qSelect)
         .eq("contractor_id", me.id)
-        .in("status", ["rejected", "completed"]) 
+        .in("status", ["rejected", "completed"])
         .order("updated_at", { ascending: false })
     ]);
 
@@ -112,25 +108,40 @@ export default function ContractorDashboard() {
   // --- actions ---
   const acceptAssignment = async (assignment) => {
     if (!assignment?.id || !me?.id) return;
+    if (busyIds.has(assignment.id)) return; // single-click guard
     setBusy(assignment.id, true);
     try {
       const now = new Date().toISOString();
-      const { error: upErr } = await supabase
+
+      // Update to accepted only if currently assigned to me
+      const { data: updData, error: upErr } = await supabase
         .from("helpdesk_assignments")
         .update({ status: "accepted", response_at: now, updated_at: now })
         .eq("id", assignment.id)
-        .eq("contractor_id", me.id);
-      if (upErr) throw upErr;
+        .eq("contractor_id", me.id)
+        .eq("status", "assigned")
+        .select("id")
+        .single();
 
+      if (upErr || !updData?.id) {
+        throw new Error(upErr?.message || "0 rows updated (not in 'assigned' state or not assigned to you).");
+      }
+
+      // Record contractor response: accepted
       const { error: respErr } = await supabase
         .from("contractor_responses")
-        .insert({$1}, { returning: 'minimal' });
+        .insert({
+          assignment_id: assignment.id,
+          contractor_id: me.id,
+          response: "accepted",
+          notes: null
+        }, { returning: 'minimal' });
       if (respErr) throw respErr;
 
       await loadAssignments();
     } catch (e) {
-      console.error(e);
-      alert("Failed to accept assignment. Please try again.");
+      console.error("Accept failed:", e);
+      alert(`Failed to accept assignment: ${e.message || "Please try again."}`);
     } finally {
       setBusy(assignment.id, false);
     }
@@ -138,29 +149,33 @@ export default function ContractorDashboard() {
 
   const rejectAssignment = async (assignment) => {
     if (!assignment?.id || !me?.id) return;
+    if (busyIds.has(assignment.id)) return; // single-click guard
     const notes = window.prompt("Please add a short note for the rejection (optional):", "");
     setBusy(assignment.id, true);
     try {
       const now = new Date().toISOString();
-      const { error: upErr } = await supabase
+      const { data: updData, error: upErr } = await supabase
         .from("helpdesk_assignments")
         .update({ status: "rejected", response_at: now, updated_at: now })
         .eq("id", assignment.id)
-        .eq("contractor_id", me.id);
-      if (upErr) throw upErr;
+        .eq("contractor_id", me.id)
+        .eq("status", "assigned")
+        .select("id")
+        .single();
+      if (upErr || !updData?.id) throw new Error(upErr?.message || "0 rows updated.");
 
       const { error: respErr } = await supabase.from("contractor_responses").insert({
         assignment_id: assignment.id,
         contractor_id: me.id,
         response: "rejected",
         notes: notes || null,
-      });
+      }, { returning: 'minimal' });
       if (respErr) throw respErr;
 
       await loadAssignments();
     } catch (e) {
-      console.error(e);
-      alert("Failed to reject assignment. Please try again.");
+      console.error("Reject failed:", e);
+      alert(`Failed to reject assignment: ${e.message || "Please try again."}`);
     } finally {
       setBusy(assignment.id, false);
     }
@@ -173,17 +188,24 @@ export default function ContractorDashboard() {
 
   const submitFinalReport = async (assignmentId) => {
     if (!assignmentId || !me?.id) return;
+    if (busyIds.has(assignmentId)) return; // single-click guard
     if (!finalReportText.trim()) {
       alert("Please enter a brief final report.");
       return;
     }
     setBusy(assignmentId, true);
     try {
+      // Insert final report authored by this contractor for this assignment
       const { error: frErr } = await supabase
         .from("contractor_final_reports")
-        .insert({$1}, { returning: 'minimal' });
+        .insert({
+          assignment_id: assignmentId,
+          contractor_id: me.id,
+          report_text: finalReportText.trim()
+        }, { returning: 'minimal' });
       if (frErr) throw frErr;
 
+      // Mark the assignment completed; if we fetched report_id, flip the MR too
       const now = new Date().toISOString();
       const { data: assignRow, error: updErr } = await supabase
         .from("helpdesk_assignments")
@@ -204,8 +226,8 @@ export default function ContractorDashboard() {
       setFinalReportText("");
       await loadAssignments();
     } catch (e) {
-      console.error(e);
-      alert("Failed to submit final report. Please try again.");
+      console.error("Final report failed:", e);
+      alert(`Failed to submit final report: ${e.message || "Please try again."}`);
     } finally {
       setBusy(assignmentId, false);
     }
