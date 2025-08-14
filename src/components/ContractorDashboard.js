@@ -1,92 +1,94 @@
 // src/components/ContractorDashboard.js
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { supabase } from "../supabase"; // adjust path if needed
+import { supabase } from "../supabase";
 
-// CONFIG: set this to your private bucket name used for attachments
+// Your private bucket
 const ATTACHMENTS_BUCKET = "maintenance-files";
 
-// util: safe uuid for file names
+/* -------------------- utils -------------------- */
 function uid() {
   return (globalThis.crypto?.randomUUID?.() ??
     `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
 }
 
-// util: try to parse bucket & path from a stored file_path that might be a full URL
+// Try to parse bucket & path from stored file_path; fallback to default bucket + raw path
 function parseBucketAndPath(filePath) {
   try {
-    // e.g. https://<proj>.supabase.co/storage/v1/object/public/<bucket>/<object>
-    // or private: .../object/sign/<bucket>/<object>?token=...
     const u = new URL(filePath);
     const segs = u.pathname.split("/").filter(Boolean);
-    // .../object/<public|sign>/<bucket>/<object...>
     const idx = segs.findIndex(s => s === "object");
     if (idx >= 0 && segs.length >= idx + 3) {
-      const kind = segs[idx + 1]; // public|sign
       const bucket = segs[idx + 2];
       const obj = segs.slice(idx + 3).join("/");
       if (bucket && obj) return { bucket, path: obj };
     }
   } catch (_) {}
-  // else treat as "bucketless" storage path
-  return { bucket: ATTACHMENTS_BUCKET, path: filePath.replace(/^\/+/, "") };
+  return { bucket: ATTACHMENTS_BUCKET, path: String(filePath).replace(/^\/+/, "") };
 }
 
-// util: create signed url for a stored path (private bucket)
 async function signUrl(filePath, expiresIn = 3600) {
   const { bucket, path } = parseBucketAndPath(filePath);
   const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, expiresIn);
-  if (error || !data?.signedUrl) {
-    // fallback (last resort) to raw path
-    return filePath;
-  }
-  return data.signedUrl;
+  return error ? filePath : (data?.signedUrl || filePath);
 }
 
+/* -------------------- component -------------------- */
 export default function ContractorDashboard() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [me, setMe] = useState(null); // contractor row
+  const [me, setMe] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
 
-  const [pending, setPending] = useState([]);   // status = 'assigned'
-  const [active, setActive] = useState([]);     // status = 'accepted'
-  const [history, setHistory] = useState([]);   // status in ('rejected','completed')
+  // Lists
+  const [pending, setPending] = useState([]);    // status = 'assigned'
+  const [active, setActive] = useState([]);      // status = 'accepted'
+  const [submitted, setSubmitted] = useState([]);// status = 'review'
+  const [history, setHistory] = useState([]);    // status in ('rejected','completed')
 
-  // Details modal (view tenant attachments + property info + final report if exists)
-  const [detailsOpenFor, setDetailsOpenFor] = useState(null); // assignment row
+  // Details modal
+  const [detailsOpenFor, setDetailsOpenFor] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [tenantAttachments, setTenantAttachments] = useState([]);
   const [tenantSignedUrls, setTenantSignedUrls] = useState({});
   const [latestFinalReport, setLatestFinalReport] = useState(null);
-  const [finalEvidence, setFinalEvidence] = useState([]); // attachments linked to latest final report
+  const [finalEvidence, setFinalEvidence] = useState([]);
   const [finalEvidenceUrls, setFinalEvidenceUrls] = useState({});
 
-  // Final report compose modal
+  // Compose modal
   const [composeOpenFor, setComposeOpenFor] = useState(null); // assignment id
   const [finalReportText, setFinalReportText] = useState("");
-  const [finalFiles, setFinalFiles] = useState([]); // [{file, id, name, size, status:'queued'|'uploading'|'done'|'error'}]
+  const [finalFiles, setFinalFiles] = useState([]); // [{id,file,name,size,status}]
   const [submitting, setSubmitting] = useState(false);
 
+  // Guards
   const [busyIds, setBusyIds] = useState(new Set());
-  const emailLower = useMemo(() => session?.user?.email?.toLowerCase() ?? null, [session]);
-
-  // --- bootstrap session ---
-  useEffect(() => {
-    let isMounted = true;
-    (async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!isMounted) return;
-      setSession(data.session);
-    })();
-    return () => { isMounted = false; };
+  const setBusy = useCallback((id, v) => {
+    setBusyIds(prev => {
+      const ns = new Set(prev);
+      if (v) ns.add(id); else ns.delete(id);
+      return ns;
+    });
   }, []);
 
-  // --- resolve contractor by lowercase email ---
+  const emailLower = useMemo(() => session?.user?.email?.toLowerCase() ?? null, [session]);
+
+  /* ----- bootstrap session ----- */
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (mounted) setSession(data.session);
+    })();
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, sess) => setSession(sess));
+    return () => { mounted = false; sub?.subscription?.unsubscribe?.(); };
+  }, []);
+
+  /* ----- resolve contractor row ----- */
   useEffect(() => {
     if (!emailLower) return;
     let cancelled = false;
-    setLoading(true);
     (async () => {
+      setLoading(true);
       setErrorMsg("");
       const { data, error } = await supabase
         .from("contractors")
@@ -98,76 +100,71 @@ export default function ContractorDashboard() {
 
       if (error || !data) {
         setMe(null);
-        setLoading(false);
         setErrorMsg("No matching contractor record found for this account. Contact admin.");
-        return;
+      } else {
+        setMe(data);
       }
-
-      setMe(data);
       setLoading(false);
     })();
     return () => { cancelled = true; };
   }, [emailLower]);
 
-  // --- helper to safely toggle busy state for an assignment id ---
-  const setBusy = useCallback((id, v) => {
-    setBusyIds(prev => {
-      const ns = new Set(prev);
-      if (v) ns.add(id); else ns.delete(id);
-      return ns;
-    });
-  }, []);
-
-  // --- load assignments once contractor resolved ---
+  /* ----- load assignments ----- */
   const loadAssignments = useCallback(async () => {
     if (!me?.id) return;
 
-    const qSelect = `id, status, report_id, assigned_at, response_at, reassignment_count, updated_at,
+    const sel = `id, status, report_id, assigned_at, response_at, reassignment_count, updated_at,
       maintenance_reports:report_id (
         id, title, description, category, urgency, location, address, created_at, updated_at, property_id,
         property:property_id ( id, name, address )
       )`;
 
-    const [pendingRes, activeRes, historyRes] = await Promise.all([
+    const [resAssigned, resAccepted, resReview, resHist] = await Promise.all([
       supabase
         .from("helpdesk_assignments")
-        .select(qSelect)
+        .select(sel)
         .eq("contractor_id", me.id)
         .eq("status", "assigned")
         .order("assigned_at", { ascending: true }),
 
       supabase
         .from("helpdesk_assignments")
-        .select(qSelect)
+        .select(sel)
         .eq("contractor_id", me.id)
         .eq("status", "accepted")
         .order("response_at", { ascending: true }),
 
       supabase
         .from("helpdesk_assignments")
-        .select(qSelect)
+        .select(sel)
+        .eq("contractor_id", me.id)
+        .eq("status", "review")
+        .order("updated_at", { ascending: false }),
+
+      supabase
+        .from("helpdesk_assignments")
+        .select(sel)
         .eq("contractor_id", me.id)
         .in("status", ["rejected", "completed"])
-        .order("updated_at", { ascending: false })
+        .order("updated_at", { ascending: false }),
     ]);
 
-    if (!pendingRes.error) setPending(pendingRes.data ?? []);
-    if (!activeRes.error) setActive(activeRes.data ?? []);
-    if (!historyRes.error) setHistory(historyRes.data ?? []);
+    if (!resAssigned.error) setPending(resAssigned.data ?? []);
+    if (!resAccepted.error) setActive(resAccepted.data ?? []);
+    if (!resReview.error) setSubmitted(resReview.data ?? []);
+    if (!resHist.error) setHistory(resHist.data ?? []);
   }, [me?.id]);
 
   useEffect(() => { if (me?.id) loadAssignments(); }, [me?.id, loadAssignments]);
 
-  // --- actions ---
+  /* ----- actions ----- */
   const acceptAssignment = async (assignment) => {
     if (!assignment?.id || !me?.id) return;
-    if (busyIds.has(assignment.id)) return; // single-click guard
+    if (busyIds.has(assignment.id)) return;
     setBusy(assignment.id, true);
     try {
       const now = new Date().toISOString();
-
-      // Update to accepted only if currently assigned to me
-      const { data: updData, error: upErr } = await supabase
+      const { data, error } = await supabase
         .from("helpdesk_assignments")
         .update({ status: "accepted", response_at: now, updated_at: now })
         .eq("id", assignment.id)
@@ -175,20 +172,15 @@ export default function ContractorDashboard() {
         .eq("status", "assigned")
         .select("id")
         .single();
+      if (error || !data?.id) throw new Error(error?.message || "0 rows updated.");
 
-      if (upErr || !updData?.id) {
-        throw new Error(upErr?.message || "0 rows updated (not in 'assigned' state or not assigned to you).");
-      }
-
-      // Record contractor response: accepted
-      const { error: respErr } = await supabase
-        .from("contractor_responses")
-        .insert({
-          assignment_id: assignment.id,
-          contractor_id: me.id,
-          response: "accepted",
-          notes: null
-        }, { returning: 'minimal' });
+      // record response
+      const { error: respErr } = await supabase.from("contractor_responses").insert({
+        assignment_id: assignment.id,
+        contractor_id: me.id,
+        response: "accepted",
+        notes: null,
+      }, { returning: "minimal" });
       if (respErr) throw respErr;
 
       await loadAssignments();
@@ -202,12 +194,12 @@ export default function ContractorDashboard() {
 
   const rejectAssignment = async (assignment) => {
     if (!assignment?.id || !me?.id) return;
-    if (busyIds.has(assignment.id)) return; // single-click guard
+    if (busyIds.has(assignment.id)) return;
     const notes = window.prompt("Please add a short note for the rejection (optional):", "");
     setBusy(assignment.id, true);
     try {
       const now = new Date().toISOString();
-      const { data: updData, error: upErr } = await supabase
+      const { data, error } = await supabase
         .from("helpdesk_assignments")
         .update({ status: "rejected", response_at: now, updated_at: now })
         .eq("id", assignment.id)
@@ -215,14 +207,14 @@ export default function ContractorDashboard() {
         .eq("status", "assigned")
         .select("id")
         .single();
-      if (upErr || !updData?.id) throw new Error(upErr?.message || "0 rows updated.");
+      if (error || !data?.id) throw new Error(error?.message || "0 rows updated.");
 
       const { error: respErr } = await supabase.from("contractor_responses").insert({
         assignment_id: assignment.id,
         contractor_id: me.id,
         response: "rejected",
         notes: notes || null,
-      }, { returning: 'minimal' });
+      }, { returning: "minimal" });
       if (respErr) throw respErr;
 
       await loadAssignments();
@@ -234,18 +226,14 @@ export default function ContractorDashboard() {
     }
   };
 
-  // ---- DETAILS MODAL ----
+  /* ----- details modal ----- */
   const openDetails = async (assignment) => {
     if (!assignment) return;
     setDetailsOpenFor(assignment);
     setDetailsLoading(true);
-    setTenantAttachments([]);
-    setTenantSignedUrls({});
-    setLatestFinalReport(null);
-    setFinalEvidence([]);
-    setFinalEvidenceUrls({});
+    setTenantAttachments([]); setTenantSignedUrls({});
+    setLatestFinalReport(null); setFinalEvidence([]); setFinalEvidenceUrls({});
     try {
-      // tenant attachments for this report
       const [{ data: atts, error: attErr }, { data: frs }] = await Promise.all([
         supabase
           .from("attachments")
@@ -263,9 +251,7 @@ export default function ContractorDashboard() {
 
       setTenantAttachments(atts || []);
       const urlMap = {};
-      for (const a of atts || []) {
-        urlMap[a.id] = await signUrl(a.file_path);
-      }
+      for (const a of atts || []) urlMap[a.id] = await signUrl(a.file_path);
       setTenantSignedUrls(urlMap);
 
       const fr = (frs && frs[0]) || null;
@@ -279,9 +265,7 @@ export default function ContractorDashboard() {
           .order("created_at", { ascending: true });
         setFinalEvidence(ev || []);
         const evMap = {};
-        for (const a of ev || []) {
-          evMap[a.id] = await signUrl(a.file_path);
-        }
+        for (const a of ev || []) evMap[a.id] = await signUrl(a.file_path);
         setFinalEvidenceUrls(evMap);
       }
     } catch (e) {
@@ -294,14 +278,11 @@ export default function ContractorDashboard() {
 
   const closeDetails = () => {
     setDetailsOpenFor(null);
-    setTenantAttachments([]);
-    setTenantSignedUrls({});
-    setLatestFinalReport(null);
-    setFinalEvidence([]);
-    setFinalEvidenceUrls({});
+    setTenantAttachments([]); setTenantSignedUrls({});
+    setLatestFinalReport(null); setFinalEvidence([]); setFinalEvidenceUrls({});
   };
 
-  // ---- FINAL REPORT COMPOSE MODAL ----
+  /* ----- compose modal (final report submit) ----- */
   const openFinalReport = (assignment) => {
     setComposeOpenFor(assignment?.id ?? null);
     setFinalReportText("");
@@ -321,7 +302,6 @@ export default function ContractorDashboard() {
         status: "queued"
       }))
     ]);
-    // reset input so same file can be picked again
     e.target.value = "";
   };
 
@@ -331,7 +311,7 @@ export default function ContractorDashboard() {
 
   const submitFinalReport = async (assignmentId) => {
     if (!assignmentId || !me?.id) return;
-    if (busyIds.has(assignmentId) || submitting) return; // single-click guard
+    if (busyIds.has(assignmentId) || submitting) return;
     if (!finalReportText.trim()) {
       alert("Please enter a brief final report.");
       return;
@@ -340,7 +320,7 @@ export default function ContractorDashboard() {
     setSubmitting(true);
     try {
       // 1) Insert final report
-      const structured = finalReportText.trim(); // later: append structured fields if you add them
+      const structured = finalReportText.trim();
       const { data: frIns, error: frErr } = await supabase
         .from("contractor_final_reports")
         .insert({
@@ -353,11 +333,9 @@ export default function ContractorDashboard() {
       if (frErr) throw frErr;
       const finalReportId = frIns.id;
 
-      // 2) Upload files sequentially (show simple per-file status)
+      // 2) Upload files & insert attachments rows
       for (const f of finalFiles) {
-        // mark uploading
         setFinalFiles(prev => prev.map(x => x.id === f.id ? { ...x, status: "uploading" } : x));
-        const ext = f.name.split(".").pop();
         const safeName = f.name.replace(/[^\w.\-]+/g, "_");
         const objectPath = `final_reports/${assignmentId}/${uid()}_${safeName}`;
 
@@ -368,45 +346,32 @@ export default function ContractorDashboard() {
             contentType: f.file.type || undefined,
             upsert: false
           });
-        if (upErr) {
-          setFinalFiles(prev => prev.map(x => x.id === f.id ? { ...x, status: "error" } : x));
-          throw upErr;
-        }
+        if (upErr) { setFinalFiles(prev => prev.map(x => x.id === f.id ? { ...x, status: "error" } : x)); throw upErr; }
 
-        // 3) Insert attachment row for this uploaded file
-        const storagePath = objectPath; // we store path; we'll sign on view
         const { error: attErr } = await supabase
           .from("attachments")
           .insert({
             contractor_final_report_id: finalReportId,
             file_name: f.name,
-            file_path: storagePath,
+            file_path: objectPath, // store path; sign later on view
             file_type: f.file.type || "application/octet-stream",
             file_size: f.size,
             duration: null
           }, { returning: "minimal" });
+        if (attErr) { setFinalFiles(prev => prev.map(x => x.id === f.id ? { ...x, status: "error" } : x)); throw attErr; }
 
-        if (attErr) {
-          setFinalFiles(prev => prev.map(x => x.id === f.id ? { ...x, status: "error" } : x));
-          throw attErr;
-        }
-
-        // mark done
         setFinalFiles(prev => prev.map(x => x.id === f.id ? { ...x, status: "done" } : x));
       }
 
-      // 4) Mark assignment completed
+      // 3) Move assignment to REVIEW
       const now = new Date().toISOString();
       const { error: updErr } = await supabase
         .from("helpdesk_assignments")
-        .update({ status: "completed", updated_at: now })
+        .update({ status: "review", review_submitted_at: now, updated_at: now })
         .eq("id", assignmentId);
       if (updErr) throw updErr;
 
-      // (Optional) Flip MR status to 'completed' if you want parity
-      // await supabase.from("maintenance_reports").update({ status: "completed", updated_at: now }).eq("id", assignRow.report_id);
-
-      // 5) Close modal & refresh lists
+      // 4) Reset modal & refresh
       setComposeOpenFor(null);
       setFinalReportText("");
       setFinalFiles([]);
@@ -422,7 +387,7 @@ export default function ContractorDashboard() {
 
   const refresh = () => { if (me?.id) loadAssignments(); };
 
-  // --- UI helpers ---
+  /* ----- UI helpers ----- */
   const Section = ({ title, children, count }) => (
     <div className="mb-8">
       <div className="flex items-center justify-between mb-3">
@@ -474,7 +439,7 @@ export default function ContractorDashboard() {
           <button onClick={refresh} className="px-3 py-2 rounded-xl border border-white/10 hover:bg-white/10">Refresh</button>
         </div>
 
-        {/* Pending (assigned, needs response) */}
+        {/* Pending (assigned) */}
         <Section title="Pending Assignments" count={pending.length}>
           {pending.length === 0 && <div className="text-white/50">No pending assignments.</div>}
           {pending.map((a) => (
@@ -512,6 +477,25 @@ export default function ContractorDashboard() {
                   </button>
                   <button onClick={() => openFinalReport(a)} disabled={busyIds.has(a.id)} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60">
                     Submit Final Report
+                  </button>
+                </>
+              }
+            />
+          ))}
+        </Section>
+
+        {/* Submitted for Review */}
+        <Section title="Submitted for Review" count={submitted.length}>
+          {submitted.length === 0 && <div className="text-white/50">Nothing awaiting review.</div>}
+          {submitted.map((a) => (
+            <Card
+              key={a.id}
+              a={a}
+              actions={
+                <>
+                  <span className="px-3 py-2 rounded-lg bg-purple-700/70">Sent for review</span>
+                  <button onClick={() => openDetails(a)} className="px-3 py-2 rounded-lg border border-white/10 hover:bg-white/10">
+                    View Details
                   </button>
                 </>
               }
@@ -606,7 +590,7 @@ export default function ContractorDashboard() {
           </div>
         )}
 
-        {/* FINAL REPORT COMPOSE MODAL */}
+        {/* COMPOSE MODAL */}
         {composeOpenFor && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
             <div className="w-full max-w-2xl rounded-2xl bg-zinc-900 border border-white/10 p-4">
@@ -626,8 +610,12 @@ export default function ContractorDashboard() {
 
               <div className="mb-3">
                 <label className="block text-sm text-white/80 mb-2">Add photos/videos/PDF (optional)</label>
-                <input type="file" multiple onChange={onPickFiles}
-                       className="block w-full text-sm text-white/70 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-white/10 file:text-white hover:file:bg-white/20"/>
+                <input
+                  type="file"
+                  multiple
+                  onChange={onPickFiles}
+                  className="block w-full text-sm text-white/70 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-white/10 file:text-white hover:file:bg-white/20"
+                />
                 {finalFiles.length > 0 && (
                   <ul className="mt-3 space-y-2">
                     {finalFiles.map(f => (
@@ -651,7 +639,7 @@ export default function ContractorDashboard() {
 
               <div className="mt-4 flex items-center justify-end gap-2">
                 <button onClick={() => setComposeOpenFor(null)} className="px-3 py-2 rounded-xl border border-white/10 hover:bg-white/10">Cancel</button>
-                <button onClick={() => submitFinalReport(composeOpenFor)} disabled={submitting} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60">
+                <button onClick={() => submitFinalReport(composeOpenFor)} disabled={submitting} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60">
                   {submitting ? "Submitting…" : "Submit"}
                 </button>
               </div>
