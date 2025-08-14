@@ -3,13 +3,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabase';
 import { ClipboardList, UserCheck, CheckCircle, X, Search, RefreshCcw, Eye } from 'lucide-react';
 
-// Private bucket name
+// Private storage bucket
 const ATTACHMENTS_BUCKET = 'maintenance-files';
 
 const STATUS_COLORS = {
   pending: 'bg-yellow-600',
   assigned: 'bg-blue-600',
   accepted: 'bg-emerald-600',
+  review: 'bg-purple-700',
   rejected: 'bg-red-600',
   completed: 'bg-gray-600',
 };
@@ -22,7 +23,7 @@ function Badge({ status }) {
   );
 }
 
-// --- storage helpers (sign URLs for private bucket) ---
+/* ---------- Storage helpers (signed URLs for private bucket) ---------- */
 function parseBucketAndPath(filePath) {
   try {
     const u = new URL(filePath);
@@ -111,6 +112,7 @@ export default function HelpdeskDashboard() {
     }));
   }
 
+  /** Load all assignments (all statuses), joined with MR + property for display */
   async function fetchAssignmentsWithReportDetails() {
     const joined = await supabase
       .from('helpdesk_assignments')
@@ -216,7 +218,6 @@ export default function HelpdeskDashboard() {
     setFinalEvidenceUrls({});
     (async () => {
       try {
-        // Tenant attachments for the report
         const [{ data: atts, error: attErr }, { data: frs }] = await Promise.all([
           supabase
             .from('attachments')
@@ -233,16 +234,13 @@ export default function HelpdeskDashboard() {
         if (attErr) throw attErr;
         setAttachments(atts || []);
 
-        // sign tenant files
         const urlMap = {};
         for (const a of atts || []) urlMap[a.id] = await signUrl(a.file_path);
         setAttachmentsUrls(urlMap);
 
-        // latest final report (if any)
         const fr = (frs && frs[0]) || null;
         setFinalReport(fr);
 
-        // final report evidence files (sign them)
         if (fr?.id) {
           const { data: ev } = await supabase
             .from('attachments')
@@ -347,9 +345,10 @@ export default function HelpdeskDashboard() {
     if (!item) return;
     if (!confirm('Mark this assignment as completed?')) return;
     try {
+      const now = new Date().toISOString();
       const { error } = await supabase
         .from('helpdesk_assignments')
-        .update({ status: 'completed', updated_at: new Date().toISOString() })
+        .update({ status: 'completed', completed_at: now, updated_at: now })
         .eq('id', item.id);
       if (error) throw error;
       setRows(prev => prev.map(a => a.id === item.id ? ({ ...a, status: 'completed' }) : a));
@@ -451,6 +450,7 @@ export default function HelpdeskDashboard() {
               <option value="pending">Pending</option>
               <option value="assigned">Assigned</option>
               <option value="accepted">Accepted</option>
+              <option value="review">Review</option>
               <option value="rejected">Rejected</option>
               <option value="completed">Completed</option>
             </select>
@@ -529,6 +529,17 @@ export default function HelpdeskDashboard() {
                         <button onClick={() => openDetails(item)} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 hover:bg-white/10">
                           <Eye className="h-4 w-4" />
                           View details
+                        </button>
+                      </>
+                    ) : item.status === 'review' ? (
+                      <>
+                        <button onClick={() => openDetails(item)} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 hover:bg-white/10">
+                          <Eye className="h-4 w-4" />
+                          View details
+                        </button>
+                        <button onClick={() => markCompleted(item)} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700">
+                          <CheckCircle className="h-4 w-4" />
+                          Mark completed
                         </button>
                       </>
                     ) : (
