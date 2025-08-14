@@ -3,6 +3,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabase';
 import { ClipboardList, UserCheck, CheckCircle, X, Search, RefreshCcw, Eye } from 'lucide-react';
 
+// Private bucket name
+const ATTACHMENTS_BUCKET = 'maintenance-files';
+
 const STATUS_COLORS = {
   pending: 'bg-yellow-600',
   assigned: 'bg-blue-600',
@@ -10,7 +13,6 @@ const STATUS_COLORS = {
   rejected: 'bg-red-600',
   completed: 'bg-gray-600',
 };
-
 function Badge({ status }) {
   const color = STATUS_COLORS[status] || 'bg-slate-600';
   return (
@@ -20,13 +22,33 @@ function Badge({ status }) {
   );
 }
 
+// --- storage helpers (sign URLs for private bucket) ---
+function parseBucketAndPath(filePath) {
+  try {
+    const u = new URL(filePath);
+    const segs = u.pathname.split('/').filter(Boolean);
+    const i = segs.findIndex(s => s === 'object');
+    if (i >= 0 && segs.length >= i + 3) {
+      const bucket = segs[i + 2];
+      const obj = segs.slice(i + 3).join('/');
+      if (bucket && obj) return { bucket, path: obj };
+    }
+  } catch (_) {}
+  return { bucket: ATTACHMENTS_BUCKET, path: String(filePath).replace(/^\/+/, '') };
+}
+async function signUrl(filePath, expiresIn = 3600) {
+  const { bucket, path } = parseBucketAndPath(filePath);
+  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, expiresIn);
+  return error ? filePath : (data?.signedUrl || filePath);
+}
+
 export default function HelpdeskDashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [rows, setRows] = useState([]);                 // normalized assignment + report + property
+  const [rows, setRows] = useState([]);
   const [contractors, setContractors] = useState([]);
-  const [rejectByAssignment, setRejectByAssignment] = useState({}); // { [assignment_id]: {notes, response_at, contractor_id} }
+  const [rejectByAssignment, setRejectByAssignment] = useState({});
 
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterProperty, setFilterProperty] = useState('all');
@@ -37,11 +59,14 @@ export default function HelpdeskDashboard() {
   const [selectedContractorId, setSelectedContractorId] = useState('');
   const [savingAssign, setSavingAssign] = useState(false);
 
-  // Details modal (lazy loads)
+  // Details modal (lazy sign urls)
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsLoading, setDetailsLoading] = useState(false);
-  const [attachments, setAttachments] = useState([]); // tenant attachments for report_id
-  const [finalReport, setFinalReport] = useState(null); // latest contractor_final_report for assignment
+  const [attachments, setAttachments] = useState([]);              // tenant attachments
+  const [attachmentsUrls, setAttachmentsUrls] = useState({});      // {id: signedUrl}
+  const [finalReport, setFinalReport] = useState(null);            // latest contractor final report
+  const [finalEvidence, setFinalEvidence] = useState([]);          // files attached to that final report
+  const [finalEvidenceUrls, setFinalEvidenceUrls] = useState({});  // {id: signedUrl}
 
   useEffect(() => {
     let mounted = true;
@@ -86,10 +111,6 @@ export default function HelpdeskDashboard() {
     }));
   }
 
-  /**
-   * Load helpdesk assignments (all statuses), joined with maintenance_reports via report_id,
-   * and nested join to properties to fetch property name.
-   */
   async function fetchAssignmentsWithReportDetails() {
     const joined = await supabase
       .from('helpdesk_assignments')
@@ -101,16 +122,13 @@ export default function HelpdeskDashboard() {
           property:property_id ( id, name, address )
         )
       `)
-      // NOTE: do NOT filter out 'completed' — we want to show/restore them too
       .order('created_at', { ascending: false });
 
     if (joined.error) throw joined.error;
-
     return (joined.data || []).map(a => shapeRow(a, a.maintenance_reports || null));
   }
 
   function shapeRow(a, report) {
-    // report may be null
     const title = report?.title ?? `Ticket #${a.report_id || a.id}`;
     const description = report?.description ?? '';
     const property_id = report?.property_id ?? null;
@@ -121,7 +139,6 @@ export default function HelpdeskDashboard() {
     const contractor_name = a.contractor?.full_name || null;
 
     return {
-      // assignment fields
       id: a.id,
       report_id: a.report_id ?? null,
       landlord_id: a.landlord_id ?? null,
@@ -133,7 +150,6 @@ export default function HelpdeskDashboard() {
       response_at: a.response_at ?? null,
       created_at: created_at ?? a.created_at,
 
-      // display extras from report
       title,
       description,
       property_id,
@@ -141,13 +157,11 @@ export default function HelpdeskDashboard() {
       urgency,
       category,
 
-      // originals
       _raw: a,
       _report: report || null,
     };
   }
 
-  // Grab the latest rejection per assignment (notes + time + contractor_id)
   async function fetchLatestRejections(assignmentIds) {
     const { data, error } = await supabase
       .from('contractor_responses')
@@ -196,11 +210,14 @@ export default function HelpdeskDashboard() {
     setDetailsOpen(true);
     setDetailsLoading(true);
     setAttachments([]);
+    setAttachmentsUrls({});
     setFinalReport(null);
-    // lazy-load attachments (tenant uploads) + latest final report (contractor)
+    setFinalEvidence([]);
+    setFinalEvidenceUrls({});
     (async () => {
       try {
-        const [{ data: atts }, { data: frs }] = await Promise.all([
+        // Tenant attachments for the report
+        const [{ data: atts, error: attErr }, { data: frs }] = await Promise.all([
           supabase
             .from('attachments')
             .select('id, file_name, file_type, file_size, file_path, created_at')
@@ -213,8 +230,30 @@ export default function HelpdeskDashboard() {
             .order('created_at', { ascending: false })
             .limit(1)
         ]);
+        if (attErr) throw attErr;
         setAttachments(atts || []);
-        setFinalReport((frs && frs[0]) || null);
+
+        // sign tenant files
+        const urlMap = {};
+        for (const a of atts || []) urlMap[a.id] = await signUrl(a.file_path);
+        setAttachmentsUrls(urlMap);
+
+        // latest final report (if any)
+        const fr = (frs && frs[0]) || null;
+        setFinalReport(fr);
+
+        // final report evidence files (sign them)
+        if (fr?.id) {
+          const { data: ev } = await supabase
+            .from('attachments')
+            .select('id, file_name, file_type, file_size, file_path, created_at')
+            .eq('contractor_final_report_id', fr.id)
+            .order('created_at', { ascending: true });
+          setFinalEvidence(ev || []);
+          const evMap = {};
+          for (const a of ev || []) evMap[a.id] = await signUrl(a.file_path);
+          setFinalEvidenceUrls(evMap);
+        }
       } finally {
         setDetailsLoading(false);
       }
@@ -224,10 +263,12 @@ export default function HelpdeskDashboard() {
     setDetailsOpen(false);
     setSelected(null);
     setAttachments([]);
+    setAttachmentsUrls({});
     setFinalReport(null);
+    setFinalEvidence([]);
+    setFinalEvidenceUrls({});
   }
 
-  // Helper: eligibility & rejection flags
   function isEligibleForCategory(contractor, category) {
     if (!category) return true;
     const list = contractor.services.map(s => s.toLowerCase().trim());
@@ -310,28 +351,20 @@ export default function HelpdeskDashboard() {
         .from('helpdesk_assignments')
         .update({ status: 'completed', updated_at: new Date().toISOString() })
         .eq('id', item.id);
-
       if (error) throw error;
-
-      // keep it in the list (we filter by status if needed)
-      setRows(prev =>
-        prev.map(a => a.id === item.id ? { ...a, status: 'completed' } : a)
-      );
-      // (Later) trigger N8N workflow for completion here
+      setRows(prev => prev.map(a => a.id === item.id ? ({ ...a, status: 'completed' }) : a));
+      // (n8n hook later)
     } catch (e) {
       alert(e.message || 'Failed to mark completed.');
     }
   }
 
-  // NEW: Reopen completed → Pending (unassigned) + MR back to 'pending'
   async function reopenAssignment(item) {
     if (!item) return;
     if (!confirm('Reopen this assignment and move it back to Pending (unassigned)?')) return;
-
     try {
       const now = new Date().toISOString();
-
-      const { data: row, error } = await supabase
+      const { error } = await supabase
         .from('helpdesk_assignments')
         .update({
           status: 'pending',
@@ -340,9 +373,7 @@ export default function HelpdeskDashboard() {
           response_at: null,
           updated_at: now,
         })
-        .eq('id', item.id)
-        
-
+        .eq('id', item.id);
       if (error) throw error;
 
       setRows(prev =>
@@ -365,7 +396,6 @@ export default function HelpdeskDashboard() {
     }
   }
 
-  // Build property options from current data
   const propertyOptions = useMemo(() => {
     const names = new Map();
     rows.forEach(r => {
@@ -376,13 +406,10 @@ export default function HelpdeskDashboard() {
     return Array.from(names.entries()).map(([value, label]) => ({ value, label }));
   }, [rows]);
 
-  // Filters
   const filtered = useMemo(() => {
     let list = rows;
     if (filterStatus !== 'all') list = list.filter(r => (r.status || 'pending') === filterStatus);
-    if (filterProperty !== 'all') {
-      list = list.filter(r => String(r.property_name || r.property_id) === filterProperty);
-    }
+    if (filterProperty !== 'all') list = list.filter(r => String(r.property_name || r.property_id) === filterProperty);
     if (q.trim()) {
       const t = q.toLowerCase();
       list = list.filter(r =>
@@ -419,11 +446,7 @@ export default function HelpdeskDashboard() {
         <div className="flex flex-col md:flex-row md:items-center gap-3 mb-6">
           <div className="flex items-center gap-2">
             <label className="text-sm text-slate-300">Status</label>
-            <select
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-              className="bg-white/10 border border-white/10 rounded-lg px-3 py-2 text-sm"
-            >
+            <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="bg-white/10 border border-white/10 rounded-lg px-3 py-2 text-sm">
               <option value="all">All</option>
               <option value="pending">Pending</option>
               <option value="assigned">Assigned</option>
@@ -432,25 +455,16 @@ export default function HelpdeskDashboard() {
               <option value="completed">Completed</option>
             </select>
           </div>
-
           <div className="flex items-center gap-2">
             <label className="text-sm text-slate-300">Property</label>
-            <select
-              value={filterProperty}
-              onChange={(e) => setFilterProperty(e.target.value)}
-              className="bg-white/10 border border-white/10 rounded-lg px-3 py-2 text-sm"
-            >
+            <select value={filterProperty} onChange={(e) => setFilterProperty(e.target.value)} className="bg-white/10 border border-white/10 rounded-lg px-3 py-2 text-sm">
               <option value="all">All</option>
-              {propertyOptions.map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
+              {propertyOptions.map(opt => (<option key={opt.value} value={opt.value}>{opt.label}</option>))}
             </select>
           </div>
-
           <div className="relative flex-1">
             <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
+              value={q} onChange={(e) => setQ(e.target.value)}
               placeholder="Search title or description…"
               className="w-full bg-white/10 border border-white/10 rounded-lg pl-9 pr-3 py-2 text-sm placeholder:text-slate-400"
             />
@@ -483,39 +497,20 @@ export default function HelpdeskDashboard() {
                         <Badge status={item.status} />
                         <span className="opacity-60">•</span>
                         <span>Urgency: <span className="uppercase tracking-wide">{item.urgency}</span></span>
-                        {item.category && (
-                          <>
-                            <span className="opacity-60">•</span>
-                            <span>Category: {item.category}</span>
-                          </>
-                        )}
-                        {item.property_name && (
-                          <>
-                            <span className="opacity-60">•</span>
-                            <span>Property: {item.property_name}</span>
-                          </>
-                        )}
+                        {item.category && (<><span className="opacity-60">•</span><span>Category: {item.category}</span></>)}
+                        {item.property_name && (<><span className="opacity-60">•</span><span>Property: {item.property_name}</span></>)}
                         <span className="opacity-60">•</span>
                         <span>{new Date(item.created_at).toLocaleString()}</span>
                       </div>
                     </div>
                     <div className="text-right text-xs text-slate-400">
-                      {typeof item.reassignment_count === 'number' && (
-                        <div>Reassignments: {item.reassignment_count}</div>
-                      )}
-                      <div>
-                        Contractor:{' '}
-                        {item.contractor_name
-                          ? <span className="font-medium">{item.contractor_name}</span>
-                          : <span className="italic text-slate-400">none</span>}
-                      </div>
+                      {typeof item.reassignment_count === 'number' && (<div>Reassignments: {item.reassignment_count}</div>)}
+                      <div>Contractor: {item.contractor_name ? <span className="font-medium">{item.contractor_name}</span> : <span className="italic text-slate-400">none</span>}</div>
                     </div>
                   </div>
 
                   {item.description && (
-                    <p className="mt-3 text-sm text-slate-200 whitespace-pre-wrap">
-                      {item.description}
-                    </p>
+                    <p className="mt-3 text-sm text-slate-200 whitespace-pre-wrap">{item.description}</p>
                   )}
 
                   {lastRej && (
@@ -528,42 +523,25 @@ export default function HelpdeskDashboard() {
                   <div className="mt-4 flex items-center gap-2 flex-wrap">
                     {item.status === 'completed' ? (
                       <>
-                        <button
-                          onClick={() => reopenAssignment(item)}
-                          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-yellow-600 hover:bg-yellow-700"
-                        >
+                        <button onClick={() => reopenAssignment(item)} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-yellow-600 hover:bg-yellow-700">
                           Reopen
                         </button>
-                        <button
-                          onClick={() => openDetails(item)}
-                          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 hover:bg-white/10"
-                        >
+                        <button onClick={() => openDetails(item)} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 hover:bg-white/10">
                           <Eye className="h-4 w-4" />
                           View details
                         </button>
                       </>
                     ) : (
                       <>
-                        <button
-                          onClick={() => openAssignModal(item)}
-                          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700"
-                        >
+                        <button onClick={() => openAssignModal(item)} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700">
                           <UserCheck className="h-4 w-4" />
                           Assign / Reassign
                         </button>
-
-                        <button
-                          onClick={() => openDetails(item)}
-                          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 hover:bg-white/10"
-                        >
+                        <button onClick={() => openDetails(item)} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 hover:bg-white/10">
                           <Eye className="h-4 w-4" />
                           View details
                         </button>
-
-                        <button
-                          onClick={() => markCompleted(item)}
-                          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700"
-                        >
+                        <button onClick={() => markCompleted(item)} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700">
                           <CheckCircle className="h-4 w-4" />
                           Mark completed
                         </button>
@@ -585,9 +563,7 @@ export default function HelpdeskDashboard() {
             <div className="w-full max-w-lg rounded-2xl bg-slate-900 border border-white/10 p-6">
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-semibold">Assign contractor</h2>
-                <button onClick={closeAssignModal} className="p-1 rounded hover:bg-white/10">
-                  <X className="h-5 w-5" />
-                </button>
+                <button onClick={closeAssignModal} className="p-1 rounded hover:bg-white/10"><X className="h-5 w-5" /></button>
               </div>
 
               <div className="mt-4 space-y-1 text-sm">
@@ -598,9 +574,7 @@ export default function HelpdeskDashboard() {
                 <div className="text-slate-300">Current status: <Badge status={selected.status} /></div>
                 <div className="text-slate-300">
                   Current contractor:{' '}
-                  {selected.contractor_name
-                    ? <span className="font-medium">{selected.contractor_name}</span>
-                    : <span className="italic text-slate-400">none</span>}
+                  {selected.contractor_name ? <span className="font-medium">{selected.contractor_name}</span> : <span className="italic text-slate-400">none</span>}
                 </div>
               </div>
 
@@ -625,27 +599,21 @@ export default function HelpdeskDashboard() {
               </label>
 
               <div className="mt-6 flex items-center justify-end gap-3">
-                <button onClick={closeAssignModal} className="px-4 py-2 rounded-lg border border-white/10">
-                  Cancel
-                </button>
-                <button
-                  onClick={assignContractor}
-                  disabled={!selectedContractorId || savingAssign}
-                  className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-60"
-                >
+                <button onClick={closeAssignModal} className="px-4 py-2 rounded-lg border border-white/10">Cancel</button>
+                <button onClick={assignContractor} disabled={!selectedContractorId || savingAssign} className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-60">
                   {savingAssign ? 'Assigning…' : 'Assign contractor'}
                 </button>
               </div>
 
               <p className="mt-4 text-xs text-slate-400">
-                Contractors matching the ticket’s category are selectable. Those who previously refused this assignment are disabled (hover shows reason).
+                Contractors matching the ticket’s category are selectable. Those who previously refused this assignment are disabled.
               </p>
             </div>
           </div>
         </div>
       )}
 
-      {/* Details modal (left: report + attachments, right: final report) */}
+      {/* Details modal (left: report + attachments, right: final report + evidence) */}
       {detailsOpen && selected && (
         <div className="fixed inset-0 z-50">
           <div className="absolute inset-0 bg-black/60" onClick={closeDetails} />
@@ -661,16 +629,14 @@ export default function HelpdeskDashboard() {
                     {selected.category && <span>Category: {selected.category}</span>}
                   </div>
                 </div>
-                <button onClick={closeDetails} className="p-1 rounded hover:bg-white/10">
-                  <X className="h-5 w-5" />
-                </button>
+                <button onClick={closeDetails} className="p-1 rounded hover:bg-white/10"><X className="h-5 w-5" /></button>
               </div>
 
               {detailsLoading ? (
                 <div className="py-10 text-center text-slate-300">Loading details…</div>
               ) : (
                 <div className="grid md:grid-cols-2 gap-6">
-                  {/* Left: Tenant report + attachments */}
+                  {/* Left: Tenant report + attachments (signed) */}
                   <div className="rounded-xl border border-white/10 p-4">
                     <h3 className="font-semibold mb-2">Report details</h3>
                     <p className="text-sm text-slate-200 whitespace-pre-wrap mb-4">{selected.description || '—'}</p>
@@ -682,7 +648,7 @@ export default function HelpdeskDashboard() {
                       <ul className="space-y-2">
                         {attachments.map(a => (
                           <li key={a.id} className="text-sm">
-                            <a className="text-blue-300 hover:underline break-all" href={a.file_path} target="_blank" rel="noreferrer">
+                            <a className="text-blue-300 hover:underline break-all" href={attachmentsUrls[a.id]} target="_blank" rel="noreferrer">
                               {a.file_name}
                             </a>
                             <span className="text-slate-400"> — {a.file_type} · {(a.file_size ?? 0)} bytes</span>
@@ -692,15 +658,29 @@ export default function HelpdeskDashboard() {
                     )}
                   </div>
 
-                  {/* Right: Contractor final report */}
+                  {/* Right: Contractor final report + evidence (signed) */}
                   <div className="rounded-xl border border-white/10 p-4">
                     <h3 className="font-semibold mb-2">Contractor final report</h3>
                     {finalReport ? (
                       <>
-                        <div className="text-sm text-slate-300 mb-2">
-                          Submitted: {new Date(finalReport.created_at).toLocaleString()}
-                        </div>
-                        <p className="text-sm text-slate-200 whitespace-pre-wrap">{finalReport.report_text}</p>
+                        <div className="text-sm text-slate-300 mb-2">Submitted: {new Date(finalReport.created_at).toLocaleString()}</div>
+                        <p className="text-sm text-slate-200 whitespace-pre-wrap mb-4">{finalReport.report_text}</p>
+
+                        <h4 className="text-sm font-medium text-slate-300 mb-2">Evidence</h4>
+                        {finalEvidence.length === 0 ? (
+                          <div className="text-sm text-slate-400">No files.</div>
+                        ) : (
+                          <ul className="space-y-2">
+                            {finalEvidence.map(a => (
+                              <li key={a.id} className="text-sm">
+                                <a className="text-blue-300 hover:underline break-all" href={finalEvidenceUrls[a.id]} target="_blank" rel="noreferrer">
+                                  {a.file_name}
+                                </a>
+                                <span className="text-slate-400"> — {a.file_type} · {(a.file_size ?? 0)} bytes</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
                       </>
                     ) : (
                       <div className="text-sm text-slate-400">Not submitted yet.</div>
