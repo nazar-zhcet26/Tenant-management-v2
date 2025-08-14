@@ -49,7 +49,7 @@ export default function HelpdeskDashboard() {
       setLoading(true);
       try {
         const [assignments, contractorList] = await Promise.all([
-          fetchOpenAssignmentsWithReportDetails(),
+          fetchAssignmentsWithReportDetails(),
           fetchContractors()
         ]);
 
@@ -87,10 +87,10 @@ export default function HelpdeskDashboard() {
   }
 
   /**
-   * Load open helpdesk assignments, joined with maintenance_reports via report_id,
+   * Load helpdesk assignments (all statuses), joined with maintenance_reports via report_id,
    * and nested join to properties to fetch property name.
    */
-  async function fetchOpenAssignmentsWithReportDetails() {
+  async function fetchAssignmentsWithReportDetails() {
     const joined = await supabase
       .from('helpdesk_assignments')
       .select(`
@@ -101,7 +101,7 @@ export default function HelpdeskDashboard() {
           property:property_id ( id, name, address )
         )
       `)
-      .neq('status', 'completed')
+      // NOTE: do NOT filter out 'completed' — we want to show/restore them too
       .order('created_at', { ascending: false });
 
     if (joined.error) throw joined.error;
@@ -167,7 +167,7 @@ export default function HelpdeskDashboard() {
   async function refresh() {
     setRefreshing(true);
     try {
-      const assignments = await fetchOpenAssignmentsWithReportDetails();
+      const assignments = await fetchAssignmentsWithReportDetails();
       let rejectionMap = {};
       if (assignments.length) {
         const ids = assignments.map(a => a.id);
@@ -313,10 +313,55 @@ export default function HelpdeskDashboard() {
 
       if (error) throw error;
 
-      setRows(prev => prev.filter(a => a.id !== item.id));
+      // keep it in the list (we filter by status if needed)
+      setRows(prev =>
+        prev.map(a => a.id === item.id ? { ...a, status: 'completed' } : a)
+      );
       // (Later) trigger N8N workflow for completion here
     } catch (e) {
       alert(e.message || 'Failed to mark completed.');
+    }
+  }
+
+  // NEW: Reopen completed → Pending (unassigned) + MR back to 'pending'
+  async function reopenAssignment(item) {
+    if (!item) return;
+    if (!confirm('Reopen this assignment and move it back to Pending (unassigned)?')) return;
+
+    try {
+      const now = new Date().toISOString();
+
+      const { data: row, error } = await supabase
+        .from('helpdesk_assignments')
+        .update({
+          status: 'pending',
+          contractor_id: null,
+          assigned_at: null,
+          response_at: null,
+          updated_at: now,
+        })
+        .eq('id', item.id)
+        
+
+      if (error) throw error;
+
+      setRows(prev =>
+        prev.map(a =>
+          a.id === item.id
+            ? {
+                ...a,
+                status: 'pending',
+                contractor_id: null,
+                contractor_name: null,
+                assigned_at: null,
+                response_at: null,
+                updated_at: now,
+              }
+            : a
+        )
+      );
+    } catch (e) {
+      alert(e.message || 'Failed to reopen assignment.');
     }
   }
 
@@ -384,6 +429,7 @@ export default function HelpdeskDashboard() {
               <option value="assigned">Assigned</option>
               <option value="accepted">Accepted</option>
               <option value="rejected">Rejected</option>
+              <option value="completed">Completed</option>
             </select>
           </div>
 
@@ -422,7 +468,7 @@ export default function HelpdeskDashboard() {
           </div>
         ) : filtered.length === 0 ? (
           <div className="grid place-items-center py-20 text-slate-300">
-            <p>No open assignments found.</p>
+            <p>No assignments found.</p>
           </div>
         ) : (
           <ul className="grid md:grid-cols-2 gap-4">
@@ -480,29 +526,49 @@ export default function HelpdeskDashboard() {
                   )}
 
                   <div className="mt-4 flex items-center gap-2 flex-wrap">
-                    <button
-                      onClick={() => openAssignModal(item)}
-                      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700"
-                    >
-                      <UserCheck className="h-4 w-4" />
-                      Assign / Reassign
-                    </button>
+                    {item.status === 'completed' ? (
+                      <>
+                        <button
+                          onClick={() => reopenAssignment(item)}
+                          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-yellow-600 hover:bg-yellow-700"
+                        >
+                          Reopen
+                        </button>
+                        <button
+                          onClick={() => openDetails(item)}
+                          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 hover:bg-white/10"
+                        >
+                          <Eye className="h-4 w-4" />
+                          View details
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => openAssignModal(item)}
+                          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700"
+                        >
+                          <UserCheck className="h-4 w-4" />
+                          Assign / Reassign
+                        </button>
 
-                    <button
-                      onClick={() => openDetails(item)}
-                      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 hover:bg-white/10"
-                    >
-                      <Eye className="h-4 w-4" />
-                      View details
-                    </button>
+                        <button
+                          onClick={() => openDetails(item)}
+                          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 hover:bg-white/10"
+                        >
+                          <Eye className="h-4 w-4" />
+                          View details
+                        </button>
 
-                    <button
-                      onClick={() => markCompleted(item)}
-                      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700"
-                    >
-                      <CheckCircle className="h-4 w-4" />
-                      Mark completed
-                    </button>
+                        <button
+                          onClick={() => markCompleted(item)}
+                          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700"
+                        >
+                          <CheckCircle className="h-4 w-4" />
+                          Mark completed
+                        </button>
+                      </>
+                    )}
                   </div>
                 </li>
               );
