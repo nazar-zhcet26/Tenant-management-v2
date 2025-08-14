@@ -1,7 +1,7 @@
 // src/components/HelpdeskDashboard.js
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabase';
-import { ClipboardList, UserCheck, UserX, CheckCircle, X, Search, RefreshCcw } from 'lucide-react';
+import { ClipboardList, UserCheck, CheckCircle, X, Search, RefreshCcw, Eye } from 'lucide-react';
 
 const STATUS_COLORS = {
   pending: 'bg-yellow-600',
@@ -24,11 +24,12 @@ export default function HelpdeskDashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [rows, setRows] = useState([]);        // normalized assignment + report fields
+  const [rows, setRows] = useState([]);                 // normalized assignment + report + property
   const [contractors, setContractors] = useState([]);
-  const [rejectedMap, setRejectedMap] = useState(new Set()); // keys: `${assignment_id}:${contractor_id}`
+  const [rejectByAssignment, setRejectByAssignment] = useState({}); // { [assignment_id]: {notes, response_at, contractor_id} }
 
   const [filterStatus, setFilterStatus] = useState('all');
+  const [filterProperty, setFilterProperty] = useState('all');
   const [q, setQ] = useState('');
 
   const [assignModalOpen, setAssignModalOpen] = useState(false);
@@ -36,27 +37,32 @@ export default function HelpdeskDashboard() {
   const [selectedContractorId, setSelectedContractorId] = useState('');
   const [savingAssign, setSavingAssign] = useState(false);
 
+  // Details modal (lazy loads)
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [attachments, setAttachments] = useState([]); // tenant attachments for report_id
+  const [finalReport, setFinalReport] = useState(null); // latest contractor_final_report for assignment
+
   useEffect(() => {
     let mounted = true;
     async function boot() {
       setLoading(true);
       try {
-        // Load open assignments + report details, contractors, and prior rejections
         const [assignments, contractorList] = await Promise.all([
           fetchOpenAssignmentsWithReportDetails(),
           fetchContractors()
         ]);
 
-        let rejSet = new Set();
+        let rejectionMap = {};
         if (assignments.length) {
-          const assignmentIds = assignments.map(a => a.id);
-          rejSet = await fetchRejectionsForAssignments(assignmentIds);
+          const ids = assignments.map(a => a.id);
+          rejectionMap = await fetchLatestRejections(ids);
         }
 
         if (!mounted) return;
         setRows(assignments);
         setContractors(contractorList);
-        setRejectedMap(rejSet);
+        setRejectByAssignment(rejectionMap);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -66,85 +72,53 @@ export default function HelpdeskDashboard() {
   }, []);
 
   async function fetchContractors() {
-    // contractors table per your schema
     const { data, error } = await supabase
       .from('contractors')
       .select('id, full_name, email, phone, services_provided')
       .order('full_name');
-
     if (error) throw error;
-
     return (data || []).map(c => ({
       id: c.id,
       name: c.full_name || (c.email?.split('@')[0]) || 'Contractor',
       email: c.email,
       phone: c.phone || '',
-      // ensure array
       services: Array.isArray(c.services_provided) ? c.services_provided.map(String) : [],
     }));
   }
 
   /**
-   * Load open helpdesk assignments, joined with maintenance_reports to get
-   * title/description/property_id/created_at/urgency/category.
-   * Falls back to 2-step fetch if needed.
+   * Load open helpdesk assignments, joined with maintenance_reports via report_id,
+   * and nested join to properties to fetch property name.
    */
   async function fetchOpenAssignmentsWithReportDetails() {
     const joined = await supabase
       .from('helpdesk_assignments')
       .select(`
-        *,
-        maintenance_reports:maintenance_reports (
-          id,
-          title,
-          description,
-          property_id,
-          created_at,
-          urgency,
-          category,
-           property:property_id ( id, name ),
-          status
+        id, report_id, landlord_id, status, contractor_id, reassignment_count, assigned_at, response_at, created_at, updated_at,
+        contractor:contractor_id ( id, full_name, email ),
+        maintenance_reports:report_id (
+          id, title, description, property_id, created_at, urgency, category, status,
+          property:property_id ( id, name, address )
         )
       `)
       .neq('status', 'completed')
       .order('created_at', { ascending: false });
 
-    if (!joined.error && joined.data) {
-      return joined.data.map(a => shapeRow(a, a.maintenance_reports || null));
-    }
+    if (joined.error) throw joined.error;
 
-    // Fallback
-    const { data: assigns, error: aErr } = await supabase
-      .from('helpdesk_assignments')
-      .select('*')
-      .neq('status', 'completed')
-      .order('created_at', { ascending: false });
-
-    if (aErr) throw aErr;
-
-    const reportIds = Array.from(new Set((assigns || []).map(r => r.report_id).filter(Boolean)));
-    let reportMap = {};
-    if (reportIds.length) {
-      const { data: reports, error: rErr } = await supabase
-        .from('maintenance_reports')
-        .select('id, title, description, property_id, created_at, urgency, category, status')
-        .in('id', reportIds);
-      if (!rErr && reports) {
-        reportMap = Object.fromEntries(reports.map(r => [r.id, r]));
-      }
-    }
-
-    return (assigns || []).map(a => shapeRow(a, reportMap[a.report_id]));
+    return (joined.data || []).map(a => shapeRow(a, a.maintenance_reports || null));
   }
 
   function shapeRow(a, report) {
-    // a = helpdesk_assignments row
-    const title = report?.title ?? a.title ?? `Ticket #${a.report_id || a.id}`;
-    const description = report?.description ?? a.description ?? '';
-    const property_id = report?.property_id ?? a.property_id ?? null;
+    // report may be null
+    const title = report?.title ?? `Ticket #${a.report_id || a.id}`;
+    const description = report?.description ?? '';
+    const property_id = report?.property_id ?? null;
+    const property_name = report?.property?.name ?? null;
     const created_at = report?.created_at ?? a.created_at;
-    const urgency = (report?.urgency || a.urgency || 'medium').toString();
-    const category = (report?.category || a.category || '').toString();
+    const urgency = (report?.urgency || 'medium').toString();
+    const category = (report?.category || '').toString();
+    const contractor_name = a.contractor?.full_name || null;
 
     return {
       // assignment fields
@@ -153,15 +127,17 @@ export default function HelpdeskDashboard() {
       landlord_id: a.landlord_id ?? null,
       status: a.status ?? 'pending',
       contractor_id: a.contractor_id ?? null,
+      contractor_name,
       reassignment_count: typeof a.reassignment_count === 'number' ? a.reassignment_count : 0,
       assigned_at: a.assigned_at ?? null,
       response_at: a.response_at ?? null,
-      created_at,
+      created_at: created_at ?? a.created_at,
 
       // display extras from report
       title,
       description,
       property_id,
+      property_name,
       urgency,
       category,
 
@@ -171,35 +147,34 @@ export default function HelpdeskDashboard() {
     };
   }
 
-  async function fetchRejectionsForAssignments(assignmentIds) {
-    // Load prior rejections, so we can disable those contractors for those assignments
+  // Grab the latest rejection per assignment (notes + time + contractor_id)
+  async function fetchLatestRejections(assignmentIds) {
     const { data, error } = await supabase
       .from('contractor_responses')
-      .select('assignment_id, contractor_id, response')
-      .in('assignment_id', assignmentIds);
-
-    const set = new Set();
-    if (!error && data) {
-      for (const r of data) {
-        if (r.response === 'rejected' && r.assignment_id && r.contractor_id) {
-          set.add(`${r.assignment_id}:${r.contractor_id}`);
-        }
+      .select('assignment_id, contractor_id, response, notes, response_at')
+      .in('assignment_id', assignmentIds)
+      .order('response_at', { ascending: false });
+    if (error) throw error;
+    const map = {};
+    for (const r of data || []) {
+      if (r.response === 'rejected' && r.assignment_id && !map[r.assignment_id]) {
+        map[r.assignment_id] = { notes: r.notes || '(no reason)', response_at: r.response_at, contractor_id: r.contractor_id };
       }
     }
-    return set;
+    return map;
   }
 
   async function refresh() {
     setRefreshing(true);
     try {
       const assignments = await fetchOpenAssignmentsWithReportDetails();
-      let rejSet = new Set();
+      let rejectionMap = {};
       if (assignments.length) {
-        const assignmentIds = assignments.map(a => a.id);
-        rejSet = await fetchRejectionsForAssignments(assignmentIds);
+        const ids = assignments.map(a => a.id);
+        rejectionMap = await fetchLatestRejections(ids);
       }
       setRows(assignments);
-      setRejectedMap(rejSet);
+      setRejectByAssignment(rejectionMap);
     } finally {
       setRefreshing(false);
     }
@@ -210,26 +185,59 @@ export default function HelpdeskDashboard() {
     setSelectedContractorId(item.contractor_id || '');
     setAssignModalOpen(true);
   }
-
   function closeAssignModal() {
     setAssignModalOpen(false);
     setSelected(null);
     setSelectedContractorId('');
   }
 
-  // Helper: is contractor eligible for this assignment?
+  function openDetails(item) {
+    setSelected(item);
+    setDetailsOpen(true);
+    setDetailsLoading(true);
+    setAttachments([]);
+    setFinalReport(null);
+    // lazy-load attachments (tenant uploads) + latest final report (contractor)
+    (async () => {
+      try {
+        const [{ data: atts }, { data: frs }] = await Promise.all([
+          supabase
+            .from('attachments')
+            .select('id, file_name, file_type, file_size, file_path, created_at')
+            .eq('report_id', item.report_id)
+            .order('created_at', { ascending: true }),
+          supabase
+            .from('contractor_final_reports')
+            .select('id, contractor_id, report_text, created_at')
+            .eq('assignment_id', item.id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+        ]);
+        setAttachments(atts || []);
+        setFinalReport((frs && frs[0]) || null);
+      } finally {
+        setDetailsLoading(false);
+      }
+    })();
+  }
+  function closeDetails() {
+    setDetailsOpen(false);
+    setSelected(null);
+    setAttachments([]);
+    setFinalReport(null);
+  }
+
+  // Helper: eligibility & rejection flags
   function isEligibleForCategory(contractor, category) {
-    if (!category) return true; // if category missing, don't block assignment
+    if (!category) return true;
     const list = contractor.services.map(s => s.toLowerCase().trim());
     return list.includes(category.toLowerCase().trim());
   }
-
   function wasRejectedBefore(assignmentId, contractorId) {
-    return rejectedMap.has(`${assignmentId}:${contractorId}`);
+    const r = rejectByAssignment[assignmentId];
+    return r && r.contractor_id === contractorId;
   }
-
-  // Build option model for the select, with disabled flags and reason
-  function getContractorOptionsFor(item) {
+  function contractorOptionsFor(item) {
     return contractors.map(c => {
       const inCategory = isEligibleForCategory(c, item.category);
       const rejected = wasRejectedBefore(item.id, c.id);
@@ -242,12 +250,10 @@ export default function HelpdeskDashboard() {
   async function assignContractor() {
     if (!selected || !selectedContractorId) return;
     const chosen = contractors.find(c => c.id === selectedContractorId);
-    // Fail-safe: block if not eligible
     if (chosen && !isEligibleForCategory(chosen, selected.category)) {
       alert('This contractor does not provide the required service/category.');
       return;
     }
-    // Fail-safe: block if previously rejected
     if (wasRejectedBefore(selected.id, selectedContractorId)) {
       alert('This contractor already refused this assignment.');
       return;
@@ -255,16 +261,19 @@ export default function HelpdeskDashboard() {
 
     setSavingAssign(true);
     try {
-      const nextCount = (selected.reassignment_count ?? 0) + 1;
+      const now = new Date().toISOString();
+      const increment =
+        selected.contractor_id && selected.contractor_id !== selectedContractorId ? 1 : 0;
 
       const { error } = await supabase
         .from('helpdesk_assignments')
         .update({
           contractor_id: selectedContractorId,
           status: 'assigned',
-          reassignment_count: nextCount,
-          assigned_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          reassignment_count: (selected.reassignment_count ?? 0) + increment,
+          assigned_at: now,
+          response_at: null,
+          updated_at: now,
         })
         .eq('id', selected.id);
 
@@ -273,7 +282,14 @@ export default function HelpdeskDashboard() {
       setRows(prev =>
         prev.map(a =>
           a.id === selected.id
-            ? { ...a, contractor_id: selectedContractorId, status: 'assigned', reassignment_count: nextCount, assigned_at: new Date().toISOString() }
+            ? {
+                ...a,
+                contractor_id: selectedContractorId,
+                contractor_name: chosen?.name || a.contractor_name,
+                status: 'assigned',
+                reassignment_count: (a.reassignment_count ?? 0) + increment,
+                assigned_at: now,
+              }
             : a
         )
       );
@@ -298,14 +314,30 @@ export default function HelpdeskDashboard() {
       if (error) throw error;
 
       setRows(prev => prev.filter(a => a.id !== item.id));
+      // (Later) trigger N8N workflow for completion here
     } catch (e) {
       alert(e.message || 'Failed to mark completed.');
     }
   }
 
+  // Build property options from current data
+  const propertyOptions = useMemo(() => {
+    const names = new Map();
+    rows.forEach(r => {
+      const key = r.property_name || r.property_id || 'Unknown';
+      const label = r.property_name || `Property #${r.property_id?.slice?.(0, 8) ?? r.property_id}`;
+      names.set(String(key), label);
+    });
+    return Array.from(names.entries()).map(([value, label]) => ({ value, label }));
+  }, [rows]);
+
+  // Filters
   const filtered = useMemo(() => {
     let list = rows;
     if (filterStatus !== 'all') list = list.filter(r => (r.status || 'pending') === filterStatus);
+    if (filterProperty !== 'all') {
+      list = list.filter(r => String(r.property_name || r.property_id) === filterProperty);
+    }
     if (q.trim()) {
       const t = q.toLowerCase();
       list = list.filter(r =>
@@ -314,7 +346,7 @@ export default function HelpdeskDashboard() {
       );
     }
     return list;
-  }, [rows, filterStatus, q]);
+  }, [rows, filterStatus, filterProperty, q]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
@@ -355,6 +387,20 @@ export default function HelpdeskDashboard() {
             </select>
           </div>
 
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-slate-300">Property</label>
+            <select
+              value={filterProperty}
+              onChange={(e) => setFilterProperty(e.target.value)}
+              className="bg-white/10 border border-white/10 rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="all">All</option>
+              {propertyOptions.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+
           <div className="relative flex-1">
             <input
               value={q}
@@ -376,73 +422,91 @@ export default function HelpdeskDashboard() {
           </div>
         ) : filtered.length === 0 ? (
           <div className="grid place-items-center py-20 text-slate-300">
-            <UserX className="h-8 w-8 mb-2" />
             <p>No open assignments found.</p>
           </div>
         ) : (
           <ul className="grid md:grid-cols-2 gap-4">
-            {filtered.map(item => (
-              <li key={item.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h3 className="text-lg font-semibold">{item.title}</h3>
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-300">
-                      <Badge status={item.status} />
-                      <span className="opacity-60">•</span>
-                      <span>Urgency: <span className="uppercase tracking-wide">{item.urgency}</span></span>
-                      {item.category && (
-                        <>
-                          <span className="opacity-60">•</span>
-                          <span>Category: {item.category}</span>
-                        </>
+            {filtered.map(item => {
+              const lastRej = rejectByAssignment[item.id];
+              return (
+                <li key={item.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-lg font-semibold">{item.title}</h3>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-300">
+                        <Badge status={item.status} />
+                        <span className="opacity-60">•</span>
+                        <span>Urgency: <span className="uppercase tracking-wide">{item.urgency}</span></span>
+                        {item.category && (
+                          <>
+                            <span className="opacity-60">•</span>
+                            <span>Category: {item.category}</span>
+                          </>
+                        )}
+                        {item.property_name && (
+                          <>
+                            <span className="opacity-60">•</span>
+                            <span>Property: {item.property_name}</span>
+                          </>
+                        )}
+                        <span className="opacity-60">•</span>
+                        <span>{new Date(item.created_at).toLocaleString()}</span>
+                      </div>
+                    </div>
+                    <div className="text-right text-xs text-slate-400">
+                      {typeof item.reassignment_count === 'number' && (
+                        <div>Reassignments: {item.reassignment_count}</div>
                       )}
-                      {item.property_id && (
-                        <>
-                          <span className="opacity-60">•</span>
-                          <span>Property #{item.property_id}</span>
-                        </>
-                      )}
-                      <span className="opacity-60">•</span>
-                      <span>{new Date(item.created_at).toLocaleString()}</span>
+                      <div>
+                        Contractor:{' '}
+                        {item.contractor_name
+                          ? <span className="font-medium">{item.contractor_name}</span>
+                          : <span className="italic text-slate-400">none</span>}
+                      </div>
                     </div>
                   </div>
-                  <div className="text-right text-xs text-slate-400">
-                    {typeof item.reassignment_count === 'number' && (
-                      <div>Reassignments: {item.reassignment_count}</div>
-                    )}
-                    {item.contractor_id ? (
-                      <div>Contractor: <span className="font-mono">{String(item.contractor_id).slice(0, 8)}…</span></div>
-                    ) : (
-                      <div>No contractor</div>
-                    )}
+
+                  {item.description && (
+                    <p className="mt-3 text-sm text-slate-200 whitespace-pre-wrap">
+                      {item.description}
+                    </p>
+                  )}
+
+                  {lastRej && (
+                    <div className="mt-3 text-xs rounded-lg bg-red-500/10 border border-red-500/30 p-2 text-red-200">
+                      Last rejection: <span className="italic">{lastRej.notes}</span>
+                      <span className="opacity-60"> — {new Date(lastRej.response_at).toLocaleString()}</span>
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={() => openAssignModal(item)}
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700"
+                    >
+                      <UserCheck className="h-4 w-4" />
+                      Assign / Reassign
+                    </button>
+
+                    <button
+                      onClick={() => openDetails(item)}
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 hover:bg-white/10"
+                    >
+                      <Eye className="h-4 w-4" />
+                      View details
+                    </button>
+
+                    <button
+                      onClick={() => markCompleted(item)}
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700"
+                    >
+                      <CheckCircle className="h-4 w-4" />
+                      Mark completed
+                    </button>
                   </div>
-                </div>
-
-                {item.description && (
-                  <p className="mt-3 text-sm text-slate-200 whitespace-pre-wrap">
-                    {item.description}
-                  </p>
-                )}
-
-                <div className="mt-4 flex items-center gap-2">
-                  <button
-                    onClick={() => openAssignModal(item)}
-                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700"
-                  >
-                    <UserCheck className="h-4 w-4" />
-                    Assign / Reassign
-                  </button>
-
-                  <button
-                    onClick={() => markCompleted(item)}
-                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700"
-                  >
-                    <CheckCircle className="h-4 w-4" />
-                    Mark completed
-                  </button>
-                </div>
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
         )}
       </main>
@@ -468,11 +532,9 @@ export default function HelpdeskDashboard() {
                 <div className="text-slate-300">Current status: <Badge status={selected.status} /></div>
                 <div className="text-slate-300">
                   Current contractor:{' '}
-                  {selected.contractor_id ? (
-                    <span className="font-mono">{selected.contractor_id}</span>
-                  ) : (
-                    <span className="italic text-slate-400">none</span>
-                  )}
+                  {selected.contractor_name
+                    ? <span className="font-medium">{selected.contractor_name}</span>
+                    : <span className="italic text-slate-400">none</span>}
                 </div>
               </div>
 
@@ -484,11 +546,13 @@ export default function HelpdeskDashboard() {
                   onChange={(e) => setSelectedContractorId(e.target.value)}
                 >
                   <option value="">— Select —</option>
-                  {getContractorOptionsFor(selected).map(opt => (
+                  {contractorOptionsFor(selected).map(opt => (
                     <option key={opt.id} value={opt.id} disabled={opt.disabled}>
                       {opt.name} — {opt.email}
                       {opt.phone ? ` (${opt.phone})` : ''}
-                      {opt.reason === 'refused' ? ' — refused' : opt.reason === 'service-mismatch' ? ' — unavailable for category' : ''}
+                      {opt.reason === 'refused' ? ' — refused'
+                        : opt.reason === 'service-mismatch' ? ' — unavailable for category'
+                        : ''}
                     </option>
                   ))}
                 </select>
@@ -508,8 +572,76 @@ export default function HelpdeskDashboard() {
               </div>
 
               <p className="mt-4 text-xs text-slate-400">
-                Only contractors matching the ticket’s category are selectable. Contractors who previously refused this assignment are disabled.
+                Contractors matching the ticket’s category are selectable. Those who previously refused this assignment are disabled (hover shows reason).
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Details modal (left: report + attachments, right: final report) */}
+      {detailsOpen && selected && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/60" onClick={closeDetails} />
+          <div className="absolute inset-0 grid place-items-center p-4">
+            <div className="w-full max-w-5xl rounded-2xl bg-slate-900 border border-white/10 p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-lg font-semibold">{selected.title}</h2>
+                  <div className="text-sm text-slate-300 flex gap-2 flex-wrap">
+                    <Badge status={selected.status} />
+                    {selected.property_name && <span>Property: {selected.property_name}</span>}
+                    <span>Urgency: {selected.urgency}</span>
+                    {selected.category && <span>Category: {selected.category}</span>}
+                  </div>
+                </div>
+                <button onClick={closeDetails} className="p-1 rounded hover:bg-white/10">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              {detailsLoading ? (
+                <div className="py-10 text-center text-slate-300">Loading details…</div>
+              ) : (
+                <div className="grid md:grid-cols-2 gap-6">
+                  {/* Left: Tenant report + attachments */}
+                  <div className="rounded-xl border border-white/10 p-4">
+                    <h3 className="font-semibold mb-2">Report details</h3>
+                    <p className="text-sm text-slate-200 whitespace-pre-wrap mb-4">{selected.description || '—'}</p>
+
+                    <h4 className="text-sm font-medium text-slate-300 mb-2">Attachments</h4>
+                    {attachments.length === 0 ? (
+                      <div className="text-sm text-slate-400">No attachments.</div>
+                    ) : (
+                      <ul className="space-y-2">
+                        {attachments.map(a => (
+                          <li key={a.id} className="text-sm">
+                            <a className="text-blue-300 hover:underline break-all" href={a.file_path} target="_blank" rel="noreferrer">
+                              {a.file_name}
+                            </a>
+                            <span className="text-slate-400"> — {a.file_type} · {(a.file_size ?? 0)} bytes</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+
+                  {/* Right: Contractor final report */}
+                  <div className="rounded-xl border border-white/10 p-4">
+                    <h3 className="font-semibold mb-2">Contractor final report</h3>
+                    {finalReport ? (
+                      <>
+                        <div className="text-sm text-slate-300 mb-2">
+                          Submitted: {new Date(finalReport.created_at).toLocaleString()}
+                        </div>
+                        <p className="text-sm text-slate-200 whitespace-pre-wrap">{finalReport.report_text}</p>
+                      </>
+                    ) : (
+                      <div className="text-sm text-slate-400">Not submitted yet.</div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -517,4 +649,3 @@ export default function HelpdeskDashboard() {
     </div>
   );
 }
-
