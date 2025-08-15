@@ -4,11 +4,12 @@ import { supabase } from "../supabase";
 import {
   RefreshCcw, CheckCircle2, XCircle, FilePlus2,
   Wrench, PackagePlus, Plus, Minus, ClipboardList,
-  Image as ImageIcon, Video as VideoIcon
+  Image as ImageIcon, Video as VideoIcon, Trash2, Paperclip
 } from "lucide-react";
 
 const BUCKET = "maintenance-files";
 
+/* -------------------- utils -------------------- */
 function uuid() {
   return (
     globalThis.crypto?.randomUUID?.() ??
@@ -25,9 +26,17 @@ function cents(n) {
   const v = Number(n || 0);
   return Math.round(v * 100) / 100;
 }
+function formatBytes(bytes) {
+  const n = Number(bytes || 0);
+  if (!n) return "0 B";
+  const k = 1024, sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(n) / Math.log(k));
+  return `${(n / Math.pow(k, i)).toFixed(i ? 1 : 0)} ${sizes[i]}`;
+}
 
+/* ================================================= */
 export default function ContractorDashboard() {
-  // 🔐 auth (stable)
+  // auth
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
 
@@ -48,11 +57,11 @@ export default function ContractorDashboard() {
   const [reportText, setReportText] = useState("");
   const [applianceName, setApplianceName] = useState("");
   const [applianceBrand, setApplianceBrand] = useState("");
-  const [vatPct, setVatPct] = useState(0); // optional VAT for now
+  const [vatPct, setVatPct] = useState(0);
   const [parts, setParts] = useState([]);
   const [files, setFiles] = useState([]); // File[]
 
-  // auth bootstrap
+  /* ---------- auth bootstrap ---------- */
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -65,66 +74,46 @@ export default function ContractorDashboard() {
     return () => sub?.subscription?.unsubscribe?.();
   }, []);
 
+  /* ---------- helper ---------- */
   const setBusyId = (id, v) =>
     setBusy(prev => { const s = new Set(prev); v ? s.add(id) : s.delete(id); return s; });
 
-  // --------- FIX #1: robust contractor lookup (no 406) ----------
+  // robust contractor lookup to avoid 406s
   const fetchContractor = useCallback(async (emailRaw) => {
     const emailLower = (emailRaw || "").toLowerCase();
 
-    // try exact lowercase eq
-    let { data: row, error } = await supabase
+    let { data: row } = await supabase
       .from("contractors")
       .select("*")
       .eq("email", emailLower)
       .maybeSingle();
     if (row) return row;
 
-    // try exact original eq
     if (!row && emailRaw && emailRaw !== emailLower) {
-      const res = await supabase
-        .from("contractors")
-        .select("*")
-        .eq("email", emailRaw)
-        .maybeSingle();
-      row = res.data;
-      if (row) return row;
+      const res = await supabase.from("contractors").select("*").eq("email", emailRaw).maybeSingle();
+      row = res.data; if (row) return row;
     }
-
-    // try case-insensitive ilike (no wildcards still matches exact, but ignore case)
     if (!row) {
-      const res = await supabase
-        .from("contractors")
-        .select("*")
-        .ilike("email", emailLower)
-        .maybeSingle();
-      row = res.data;
-      if (row) return row;
+      const res = await supabase.from("contractors").select("*").ilike("email", emailLower).maybeSingle();
+      row = res.data; if (row) return row;
     }
-
-    // final fallback: ilike with wildcards
     if (!row) {
-      const res = await supabase
-        .from("contractors")
-        .select("*")
-        .ilike("email", `%${emailLower}%`)
-        .maybeSingle();
+      const res = await supabase.from("contractors").select("*").ilike("email", `%${emailLower}%`).maybeSingle();
       row = res.data;
     }
     return row || null;
   }, []);
-  // ---------------------------------------------------------------
 
-  // fetch contractor + his assignments (with report, property, and tenant attachments)
+  /* ---------- load data ---------- */
   const loadData = useCallback(async () => {
     if (!user?.email) return;
     setRefreshing(true);
     try {
       const contractor = await fetchContractor(user.email);
       if (!contractor) {
-        console.warn("No contractor profile found for this account:", user.email);
+        console.warn("No contractor profile found for:", user.email);
         setMe(null);
-        setAssignments([]);        // keep UI empty rather than throwing
+        setAssignments([]);
         return;
       }
       setMe(contractor);
@@ -156,7 +145,7 @@ export default function ContractorDashboard() {
 
   const refresh = () => loadData();
 
-  // bucket signed urls cache (for tenant attachments preview)
+  // signed URL cache
   const [signed, setSigned] = useState({});
   const getSigned = useCallback(async (path) => {
     if (!path) return null;
@@ -177,7 +166,7 @@ export default function ContractorDashboard() {
     return g;
   }, [assignments]);
 
-  /* ===== actions ===== */
+  /* ---------- actions ---------- */
   const accept = async (a) => {
     if (!a?.id || !me?.id || busy.has(a.id)) return;
     setBusyId(a.id, true);
@@ -227,7 +216,7 @@ export default function ContractorDashboard() {
   const openDetails = (id) => setDetailsId(id);
   const closeDetails = () => setDetailsId(null);
 
-  // open final-report modal with fresh state
+  // final report modal open/reset
   const openFinal = (a) => {
     setFinalFor(a.id);
     setReportText("");
@@ -251,12 +240,14 @@ export default function ContractorDashboard() {
   }, [parts]);
   const total = useMemo(() => cents(subtotal * (1 + (Number(vatPct)||0)/100)), [subtotal, vatPct]);
 
+  // file pick & remove
   const onFilePick = (e) => {
     const chosen = Array.from(e.target.files || []);
     if (!chosen.length) return;
     setFiles(prev => [...prev, ...chosen]);
     e.target.value = "";
   };
+  const removeFileAt = (idx) => setFiles(prev => prev.filter((_, i) => i !== idx));
 
   const uploadAttachment = async (assignmentId, finalReportId, file) => {
     const ext = file.name.split(".").pop();
@@ -300,7 +291,7 @@ export default function ContractorDashboard() {
       if (frErr) throw frErr;
       const finalReportId = frIns.id;
 
-      // 2) parts (optional)
+      // 2) parts
       const rows = parts
         .filter(p => (p.part_name?.trim()?.length || 0) > 0)
         .map(p => ({
@@ -318,7 +309,7 @@ export default function ContractorDashboard() {
         if (pErr) throw pErr;
       }
 
-      // 3) uploads (optional)
+      // 3) uploads
       for (const f of files) await uploadAttachment(assignmentId, finalReportId, f);
 
       // 4) set status -> review
@@ -341,13 +332,13 @@ export default function ContractorDashboard() {
     }
   };
 
-  /* ===== UI ===== */
+  /* ---------- UI ---------- */
 
   if (authReady && !user) {
     return (
       <div className="min-h-screen grid place-items-center bg-[#0b1220] text-white">
         <div className="text-center">
-          <h2 className="text-xl font-semibold mb-2">Session expired</h2>
+          <h2 className="text-xl font-semibold mb-2">Please sign in again</h2>
         </div>
       </div>
     );
@@ -491,6 +482,7 @@ export default function ContractorDashboard() {
           total={total}
           files={files}
           onFilePick={onFilePick}
+          removeFileAt={removeFileAt}
           onSubmit={() => submitFinalReport(finalFor)}
         />
       )}
@@ -498,51 +490,154 @@ export default function ContractorDashboard() {
   );
 }
 
-/* ===== Subcomponents ===== */
+/* ================== Subcomponents ================== */
 
 function DetailsModal({ assignment, onClose, getSigned }) {
   const mr = assignment?.maintenance_reports || {};
   const prop = mr.property || {};
-  const attachments = mr.attachments || [];
+  const tenantAttachments = mr.attachments || [];
+
+  // load latest contractor final report + parts + attachments
+  const [finalReport, setFinalReport] = useState(null);
+  const [parts, setParts] = useState([]);
+  const [contractorAttachments, setContractorAttachments] = useState([]);
+
+  useEffect(() => {
+    if (!assignment?.id) return;
+    (async () => {
+      const { data: fr } = await supabase
+        .from("contractor_final_reports")
+        .select("id, report_text, appliance_name, appliance_brand, parts_subtotal, tax_rate, total_cost, created_at")
+        .eq("assignment_id", assignment.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      setFinalReport(fr || null);
+
+      if (fr?.id) {
+        const [{ data: pr }, { data: att }] = await Promise.all([
+          supabase.from("contractor_final_parts")
+            .select("part_name, brand, qty, unit_price, line_total")
+            .eq("final_report_id", fr.id)
+            .order("created_at", { ascending: true }),
+          supabase.from("attachments")
+            .select("*")
+            .eq("contractor_final_report_id", fr.id)
+        ]);
+        setParts(pr || []);
+        setContractorAttachments(att || []);
+      } else {
+        setParts([]);
+        setContractorAttachments([]);
+      }
+    })();
+  }, [assignment?.id]);
+
   return (
     <div className="fixed inset-0 z-50 bg-black/60 grid place-items-center p-4">
-      <div className="bg-white text-gray-900 rounded-2xl shadow-xl max-w-3xl w-full p-6 relative">
-        <button className="absolute top-4 right-4 text-gray-500 hover:text-black" onClick={onClose}>✕</button>
+      <div className="bg-[#0f172a] text-white rounded-2xl shadow-xl max-w-4xl w-full p-6 relative">
+        <button className="absolute top-4 right-4 text-white/60 hover:text-white" onClick={onClose}>✕</button>
+
         <div className="flex items-center gap-2 mb-2">
-          <ClipboardList className="w-5 h-5 text-blue-600" />
+          <ClipboardList className="w-5 h-5 text-blue-400" />
           <h3 className="text-2xl font-bold">{mr.title || mr.category || "Maintenance Request"}</h3>
         </div>
-        <div className="text-sm text-gray-600 mb-1">{prop.name || "—"} • {prop.address || mr.address || "—"}</div>
-        <div className="text-sm text-gray-600 mb-3">Unit: {mr.location || "—"} • Urgency: {mr.urgency || "—"}</div>
-        <p className="text-gray-800 whitespace-pre-wrap mb-4">{mr.description}</p>
+        <div className="text-sm text-white/70 mb-1">{prop.name || "—"} • {prop.address || mr.address || "—"}</div>
+        <div className="text-sm text-white/70 mb-3">Unit: {mr.location || "—"} • Urgency: {mr.urgency || "—"}</div>
+        <p className="text-white/90 whitespace-pre-wrap mb-6">{mr.description}</p>
 
-        {attachments?.length > 0 && (
+        {/* Tenant attachments */}
+        {tenantAttachments?.length > 0 && (
           <>
-            <div className="font-semibold mb-1">Tenant Attachments</div>
-            <div className="grid grid-cols-3 gap-3">
-              {attachments.map(att => (
-                <AttachmentThumb key={att.id} att={att} getSigned={getSigned} />
+            <div className="font-semibold mb-2">Tenant Attachments</div>
+            <div className="grid grid-cols-3 gap-3 mb-6">
+              {tenantAttachments.map(att => (
+                <AttachmentThumb key={att.id} att={att} getSigned={getSigned} dark />
               ))}
             </div>
           </>
+        )}
+
+        {/* Contractor final report, if any */}
+        {finalReport && (
+          <div className="mt-2">
+            <div className="font-semibold text-lg mb-2">Contractor Final Report</div>
+            <div className="grid sm:grid-cols-2 gap-3 text-sm">
+              <div><span className="text-white/60">Appliance:</span> {finalReport.appliance_name || "—"}</div>
+              <div><span className="text-white/60">Brand:</span> {finalReport.appliance_brand || "—"}</div>
+              <div><span className="text-white/60">Subtotal:</span> AED {(finalReport.parts_subtotal ?? 0).toFixed(2)}</div>
+              <div><span className="text-white/60">VAT%:</span> {((finalReport.tax_rate || 0) * 100).toFixed(2)}</div>
+              <div className="sm:col-span-2"><span className="text-white/60">Total:</span> AED {(finalReport.total_cost ?? 0).toFixed(2)}</div>
+            </div>
+
+            {parts?.length > 0 && (
+              <div className="mt-4">
+                <div className="text-sm font-semibold mb-2">Parts</div>
+                <div className="text-sm overflow-x-auto">
+                  <table className="w-full text-left border-separate" style={{ borderSpacing: 0 }}>
+                    <thead className="text-white/70">
+                      <tr>
+                        <th className="py-1 pr-2">Part</th>
+                        <th className="py-1 pr-2">Brand</th>
+                        <th className="py-1 pr-2">Qty</th>
+                        <th className="py-1 pr-2">Unit (AED)</th>
+                        <th className="py-1 pr-2">Line (AED)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {parts.map((p, i) => (
+                        <tr key={i} className="border-t border-white/10">
+                          <td className="py-1 pr-2">{p.part_name}</td>
+                          <td className="py-1 pr-2">{p.brand || "—"}</td>
+                          <td className="py-1 pr-2">{p.qty}</td>
+                          <td className="py-1 pr-2">{Number(p.unit_price).toFixed(2)}</td>
+                          <td className="py-1 pr-2">{Number(p.line_total).toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {contractorAttachments?.length > 0 && (
+              <>
+                <div className="font-semibold mt-6 mb-2">Contractor Evidence</div>
+                <div className="grid grid-cols-3 gap-3">
+                  {contractorAttachments.map(att => (
+                    <AttachmentThumb key={att.id} att={att} getSigned={getSigned} dark />
+                  ))}
+                </div>
+              </>
+            )}
+
+            {finalReport.report_text && (
+              <div className="mt-6">
+                <div className="font-semibold mb-1">Technician Notes</div>
+                <div className="text-white/90 whitespace-pre-wrap">{finalReport.report_text}</div>
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>
   );
 }
-function AttachmentThumb({ att, getSigned }) {
+
+function AttachmentThumb({ att, getSigned, dark = false }) {
   const [url, setUrl] = useState(null);
   useEffect(() => { (async () => setUrl(await getSigned(att.file_path)))(); }, [att, getSigned]);
   const type = att.file_type || "file";
-  if (!url) return <div className="aspect-video rounded-lg bg-gray-200" />;
+  const frame = dark ? "border-white/10 bg-white/5" : "border-gray-200 bg-gray-100";
+  if (!url) return <div className={`aspect-video rounded-lg ${frame}`} />;
   return (
     <a href={url} target="_blank" rel="noreferrer" className="block">
-      <div className="aspect-video rounded-lg overflow-hidden border border-gray-200 bg-gray-100 flex items-center justify-center">
+      <div className={`aspect-video rounded-lg overflow-hidden border ${frame} flex items-center justify-center`}>
         {type === "image" ? <img src={url} alt={att.file_name} className="w-full h-full object-cover" /> :
          type === "video" ? <video src={url} controls className="w-full h-full object-cover" /> :
-         <div className="p-6 text-gray-600 text-sm">{att.file_name}</div>}
+         <div className={`p-6 text-sm ${dark ? "text-white/70" : "text-gray-600"}`}>{att.file_name}</div>}
       </div>
-      <div className="mt-1 text-xs text-gray-600 truncate">{att.file_name}</div>
+      <div className={`mt-1 text-xs truncate ${dark ? "text-white/60" : "text-gray-600"}`}>{att.file_name}</div>
     </a>
   );
 }
@@ -555,24 +650,25 @@ function FinalReportModal({
   vatPct, setVatPct,
   parts, updatePart, addPart, removePart,
   subtotal, total,
-  files, onFilePick,
+  files, onFilePick, removeFileAt,
   onSubmit
 }) {
   const a = assignment || {};
   const mr = a.maintenance_reports || {};
   const prop = mr.property || {};
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 grid place-items-center p-4">
-      <div className="bg-white text-gray-900 rounded-2xl shadow-xl max-w-3xl w-full p-6 relative">
-        <button className="absolute top-4 right-4 text-gray-500 hover:text-black" onClick={onClose}>✕</button>
+    <div className="fixed inset-0 z-50 bg-black/70 grid place-items-center p-4">
+      <div className="bg-[#111827] text-white rounded-2xl shadow-2xl max-w-3xl w-full p-6 relative">
+        <button className="absolute top-4 right-4 text-white/70 hover:text-white" onClick={onClose}>✕</button>
         <h3 className="text-2xl font-bold mb-1">Submit Final Report</h3>
-        <div className="text-sm text-gray-600 mb-4">
+        <div className="text-sm text-white/70 mb-4">
           {prop.name || "—"} • {prop.address || mr.address || "—"} — Unit {mr.location || "—"}
         </div>
 
         <label className="block text-sm font-medium mb-1">Work Summary</label>
         <textarea
-          className="w-full border rounded-lg p-2 mb-3"
+          className="w-full rounded-lg p-2 mb-3 bg-[#0f172a] border border-white/10 text-white placeholder-white/50"
           rows={4}
           placeholder="Describe what you did / findings…"
           value={reportText}
@@ -582,21 +678,21 @@ function FinalReportModal({
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div>
             <label className="block text-sm font-medium mb-1">Appliance</label>
-            <input className="w-full border rounded-lg p-2" placeholder="e.g., Split AC" value={applianceName} onChange={e => setApplianceName(e.target.value)} />
+            <input className="w-full rounded-lg p-2 bg-[#0f172a] border border-white/10 text-white placeholder-white/50" placeholder="e.g., Split AC" value={applianceName} onChange={e => setApplianceName(e.target.value)} />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Brand / Company</label>
-            <input className="w-full border rounded-lg p-2" placeholder="e.g., Daikin" value={applianceBrand} onChange={e => setApplianceBrand(e.target.value)} />
+            <input className="w-full rounded-lg p-2 bg-[#0f172a] border border-white/10 text-white placeholder-white/50" placeholder="e.g., Daikin" value={applianceBrand} onChange={e => setApplianceBrand(e.target.value)} />
           </div>
         </div>
 
         <div className="flex items-center justify-between mb-2">
           <div className="font-semibold flex items-center gap-2"><PackagePlus className="w-4 h-4" /> Parts Used</div>
-          <button onClick={addPart} className="text-sm inline-flex items-center gap-1 px-2 py-1 rounded border border-gray-300 hover:bg-gray-50"><Plus className="w-4 h-4" />Add</button>
+          <button onClick={addPart} className="text-sm inline-flex items-center gap-1 px-2 py-1 rounded border border-white/10 hover:bg-white/10"><Plus className="w-4 h-4" />Add</button>
         </div>
 
         <div className="mb-3">
-          <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-gray-600 mb-1">
+          <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-white/60 mb-1">
             <div className="col-span-5">Part name</div>
             <div className="col-span-3">Brand</div>
             <div className="col-span-2">Qty</div>
@@ -604,40 +700,86 @@ function FinalReportModal({
           </div>
           {parts.map(row => (
             <div key={row.id} className="grid grid-cols-12 gap-2 mb-2">
-              <input className="col-span-5 border rounded-lg p-2 text-sm" placeholder="e.g., Capacitor 35µF" value={row.part_name} onChange={e => updatePart(row.id, { part_name: e.target.value })} />
-              <input className="col-span-3 border rounded-lg p-2 text-sm" placeholder="e.g., Epcos" value={row.brand || ""} onChange={e => updatePart(row.id, { brand: e.target.value })} />
-              <input type="number" min="0" step="0.1" className="col-span-2 border rounded-lg p-2 text-sm" value={row.qty} onChange={e => updatePart(row.id, { qty: e.target.value })} />
+              <input className="col-span-5 rounded-lg p-2 text-sm bg-[#0f172a] border border-white/10 text-white placeholder-white/50" placeholder="e.g., Capacitor 35µF" value={row.part_name} onChange={e => updatePart(row.id, { part_name: e.target.value })} />
+              <input className="col-span-3 rounded-lg p-2 text-sm bg-[#0f172a] border border-white/10 text-white placeholder-white/50" placeholder="e.g., Epcos" value={row.brand || ""} onChange={e => updatePart(row.id, { brand: e.target.value })} />
+              <input type="number" min="0" step="0.1" className="col-span-2 rounded-lg p-2 text-sm bg-[#0f172a] border border-white/10 text-white" value={row.qty} onChange={e => updatePart(row.id, { qty: e.target.value })} />
               <div className="col-span-2 flex items-center gap-2">
-                <input type="number" min="0" step="0.01" className="w-full border rounded-lg p-2 text-sm" value={row.unit_price} onChange={e => updatePart(row.id, { unit_price: e.target.value })} />
-                <button onClick={() => removePart(row.id)} className="px-2 py-1 rounded border border-gray-300 hover:bg-gray-50"><Minus className="w-4 h-4" /></button>
+                <input type="number" min="0" step="0.01" className="w-full rounded-lg p-2 text-sm bg-[#0f172a] border border-white/10 text-white" value={row.unit_price} onChange={e => updatePart(row.id, { unit_price: e.target.value })} />
+                <button onClick={() => removePart(row.id)} className="px-2 py-1 rounded border border-white/10 hover:bg-white/10"><Minus className="w-4 h-4" /></button>
               </div>
             </div>
           ))}
         </div>
 
-        <div className="grid grid-cols-3 gap-3 items-end mb-4">
+        <div className="grid grid-cols-3 gap-3 items-end mb-5">
           <div>
             <label className="block text-sm font-medium mb-1">VAT % (optional)</label>
-            <input type="number" min="0" step="0.01" className="w-full border rounded-lg p-2" placeholder="0 or 5" value={vatPct} onChange={e => setVatPct(e.target.value)} />
+            <input type="number" min="0" step="0.01" className="w-full rounded-lg p-2 bg-[#0f172a] border border-white/10 text-white" placeholder="0 or 5" value={vatPct} onChange={e => setVatPct(e.target.value)} />
           </div>
           <div className="text-sm">
-            <div className="text-gray-600">Subtotal</div>
+            <div className="text-white/70">Subtotal</div>
             <div className="text-lg font-semibold">AED {subtotal.toFixed(2)}</div>
           </div>
           <div className="text-sm">
-            <div className="text-gray-600">Total</div>
+            <div className="text-white/70">Total</div>
             <div className="text-lg font-semibold">AED {total.toFixed(2)}</div>
           </div>
         </div>
 
+        {/* Evidence picker with preview */}
         <div className="mb-4">
-          <div className="font-semibold mb-1 flex items-center gap-2"><ImageIcon className="w-4 h-4" /> <VideoIcon className="w-4 h-4" /> Evidence (photos/videos)</div>
-          <input type="file" multiple accept="image/*,video/*" onChange={onFilePick} className="block w-full text-sm text-gray-700" />
-          {!!files.length && <div className="mt-2 text-xs text-gray-600">{files.length} file(s) selected</div>}
+          <div className="font-semibold mb-2 flex items-center gap-2">
+            <ImageIcon className="w-4 h-4" /><VideoIcon className="w-4 h-4" />
+            <span>Evidence (photos/videos)</span>
+          </div>
+
+          <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 hover:bg-white/10 cursor-pointer">
+            <Paperclip className="w-4 h-4 text-white/70" />
+            <span className="text-sm">Add files</span>
+            <input type="file" multiple accept="image/*,video/*" onChange={onFilePick} className="hidden" />
+          </label>
+          <div className="mt-1 text-xs text-white/60">Supported: images & videos. You can add multiple.</div>
+
+          {files.length === 0 ? (
+            <div className="mt-3 text-sm text-white/70">No files attached yet.</div>
+          ) : (
+            <div className="mt-3 grid sm:grid-cols-2 gap-3">
+              {files.map((f, idx) => {
+                const isImg = (f.type || "").startsWith("image/");
+                const isVid = (f.type || "").startsWith("video/");
+                const url = URL.createObjectURL(f);
+                return (
+                  <div key={`${f.name}-${idx}`} className="flex items-center gap-3 border border-white/10 rounded-lg p-2 bg-white/5">
+                    <div className="w-24 h-16 rounded-md overflow-hidden bg-white/10 flex items-center justify-center">
+                      {isImg ? (
+                        <img src={url} alt={f.name} className="w-full h-full object-cover" onLoad={() => URL.revokeObjectURL(url)} />
+                      ) : isVid ? (
+                        <video src={url} className="w-full h-full object-cover" muted onLoadedData={() => URL.revokeObjectURL(url)} />
+                      ) : (
+                        <div className="text-xs text-white/60 px-2">FILE</div>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm truncate" title={f.name}>{f.name}</div>
+                      <div className="text-xs text-white/60">{formatBytes(f.size)} • {(f.type || "unknown")}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeFileAt(idx)}
+                      className="p-2 rounded-md border border-white/10 hover:bg-white/10 text-white/80"
+                      title="Remove"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="mt-4 flex items-center justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50">Cancel</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-white/10 hover:bg-white/10">Cancel</button>
           <button disabled={submitting} onClick={onSubmit} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-60">
             {submitting ? "Submitting…" : "Submit Final Report"}
           </button>
