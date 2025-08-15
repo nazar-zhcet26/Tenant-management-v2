@@ -23,7 +23,7 @@ async function loadJsPDF() {
   return window.jspdf.jsPDF;
 }
 
-/** Status colors (badge + subtle card accent) */
+/** Status colors (badge + subtle ring accent) */
 const STATUS = {
   pending:   { badge: "bg-amber-500/15 text-amber-300 border border-amber-500/30", ring: "ring-amber-500/20" },
   assigned:  { badge: "bg-sky-500/15 text-sky-300 border border-sky-500/30",       ring: "ring-sky-500/20" },
@@ -32,6 +32,13 @@ const STATUS = {
   completed: { badge: "bg-teal-500/15 text-teal-300 border border-teal-500/30",           ring: "ring-teal-500/20" },
   rejected:  { badge: "bg-rose-500/15 text-rose-300 border border-rose-500/30",           ring: "ring-rose-500/20" },
 };
+
+/** ====== LIGHTER THEME TWEAKS ====== */
+const PAGE_BG = "bg-gradient-to-b from-[#131c35] via-[#101a33] to-[#0b1220]";
+const PANEL_BG = "bg-white/[0.06]";
+const PANEL_BORDER = "border-white/15";
+const INPUT_BG = "bg-white/[0.07]";
+const INPUT_BORDER = "border-white/15";
 
 export default function HelpdeskDashboard() {
   // auth
@@ -210,17 +217,17 @@ export default function HelpdeskDashboard() {
   /* UI */
   if (authReady && !user) {
     return (
-      <div className="min-h-screen grid place-items-center bg-[#0b1220] text-white">
+      <div className={`min-h-screen grid place-items-center ${PAGE_BG} text-white`}>
         <div className="text-center">
           <h2 className="text-xl font-semibold mb-2">Please sign in again</h2>
         </div>
       </div>
     );
   }
-  if (loading) return <div className="min-h-screen grid place-items-center text-white bg-[#0b1220]">Loading…</div>;
+  if (loading) return <div className={`min-h-screen grid place-items-center text-white ${PAGE_BG}`}>Loading…</div>;
 
   return (
-    <div className="min-h-screen bg-[#0b1220] text-white">
+    <div className={`min-h-screen ${PAGE_BG} text-white`}>
       <div className="max-w-7xl mx-auto p-6">
         <header className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
@@ -242,7 +249,7 @@ export default function HelpdeskDashboard() {
 
         {/* Filters */}
         <div className="grid md:grid-cols-3 gap-3 mb-6">
-          <select className="rounded-lg px-3 py-2 bg-white/5 border border-white/10" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+          <select className={`rounded-lg px-3 py-2 ${INPUT_BG} border ${INPUT_BORDER}`} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
             <option value="all">All Statuses</option>
             <option value="pending">Pending</option>
             <option value="assigned">Assigned</option>
@@ -252,12 +259,12 @@ export default function HelpdeskDashboard() {
             <option value="rejected">Rejected</option>
           </select>
 
-          <select className="rounded-lg px-3 py-2 bg-white/5 border border-white/10" value={propertyFilter} onChange={e => setPropertyFilter(e.target.value)}>
+          <select className={`rounded-lg px-3 py-2 ${INPUT_BG} border ${INPUT_BORDER}`} value={propertyFilter} onChange={e => setPropertyFilter(e.target.value)}>
             {propertyOptions.map(opt => <option key={opt} value={opt}>{opt === "all" ? "All Properties" : opt}</option>)}
           </select>
 
           <input
-            className="rounded-lg px-3 py-2 bg-white/5 border border-white/10"
+            className={`rounded-lg px-3 py-2 ${INPUT_BG} border ${INPUT_BORDER}`}
             placeholder="Search title or description…"
             value={q}
             onChange={e => setQ(e.target.value)}
@@ -275,8 +282,9 @@ export default function HelpdeskDashboard() {
               <div
                 key={a.id}
                 className={cn(
-                  "rounded-2xl p-4 shadow-sm border bg-white/[0.03]",
-                  "border-white/10 hover:border-white/20 transition",
+                  "rounded-2xl p-4 shadow-sm border",
+                  PANEL_BG, PANEL_BORDER,
+                  "hover:border-white/20 transition",
                   "ring-1", s.ring
                 )}
               >
@@ -498,7 +506,7 @@ function DetailsModal({ assignment, onClose, getSigned }) {
       // IMPORTANT: satisfy "one_fk_only" → ONLY contractor_final_report_id (report_id MUST be null)
       const { error: insErr } = await supabase.from("attachments").insert({
         contractor_final_report_id: finalReport.id,
-        report_id: null,                        // <-- critical fix
+        report_id: null,
         file_name: fileName,
         file_path: storagePath,
         file_type: "pdf",
@@ -559,11 +567,11 @@ function DetailsModal({ assignment, onClose, getSigned }) {
             <div className="text-sm text-white/70 mb-3">Unit: {mr.location || "—"} • Urgency: {mr.urgency || "—"} • Category: {mr.category || "—"}</div>
             <p className="text-white/90 whitespace-pre-wrap mb-4">{mr.description || "—"}</p>
 
-            { (mr.attachments||[])?.length > 0 && (
+            {(tenantAttachments||[])?.length > 0 && (
               <>
                 <div className="font-semibold mb-2">Tenant Attachments</div>
                 <div className="grid grid-cols-3 gap-3">
-                  { (mr.attachments||[]).map(att => (
+                  {tenantAttachments.map(att => (
                     <AttachmentThumb key={att.id} att={att} getSigned={getSigned} />
                   ))}
                 </div>
