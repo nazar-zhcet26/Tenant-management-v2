@@ -120,7 +120,7 @@ export default function HelpdeskDashboard() {
         id, report_id, landlord_id, status, contractor_id, reassignment_count, assigned_at, response_at, created_at, updated_at,
         contractor:contractor_id ( id, full_name, email ),
         maintenance_reports:report_id (
-          id, title, description, property_id, created_at, urgency, category, status,
+          id, title, description, property_id, created_at, urgency, category, status,location,
           property:property_id ( id, name, address )
         )
       `)
@@ -134,6 +134,7 @@ export default function HelpdeskDashboard() {
     const title = report?.title ?? `Ticket #${a.report_id || a.id}`;
     const description = report?.description ?? '';
     const property_id = report?.property_id ?? null;
+    const location = report?.location ?? null;
     const property_name = report?.property?.name ?? null;
     const created_at = report?.created_at ?? a.created_at;
     const urgency = (report?.urgency || 'medium').toString();
@@ -156,6 +157,7 @@ export default function HelpdeskDashboard() {
       description,
       property_id,
       property_name,
+      location,
       urgency,
       category,
 
@@ -499,6 +501,7 @@ export default function HelpdeskDashboard() {
                         <span>Urgency: <span className="uppercase tracking-wide">{item.urgency}</span></span>
                         {item.category && (<><span className="opacity-60">•</span><span>Category: {item.category}</span></>)}
                         {item.property_name && (<><span className="opacity-60">•</span><span>Property: {item.property_name}</span></>)}
+                        {item.location && (<><span className="opacity-60">•</span><span>Unit: {item.location}</span></>)}
                         <span className="opacity-60">•</span>
                         <span>{new Date(item.created_at).toLocaleString()}</span>
                       </div>
@@ -636,6 +639,7 @@ export default function HelpdeskDashboard() {
                   <div className="text-sm text-slate-300 flex gap-2 flex-wrap">
                     <Badge status={selected.status} />
                     {selected.property_name && <span>Property: {selected.property_name}</span>}
+                    {selected.location && <span>Unit: {selected.location}</span>}
                     <span>Urgency: {selected.urgency}</span>
                     {selected.category && <span>Category: {selected.category}</span>}
                   </div>
@@ -706,3 +710,4 @@ export default function HelpdeskDashboard() {
     </div>
   );
 }
+
