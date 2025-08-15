@@ -27,7 +27,7 @@ function cents(n) {
 }
 
 export default function ContractorDashboard() {
-  // 🔐 auth (stable: no redirect on transient nulls)
+  // 🔐 auth (stable)
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
 
@@ -68,16 +68,65 @@ export default function ContractorDashboard() {
   const setBusyId = (id, v) =>
     setBusy(prev => { const s = new Set(prev); v ? s.add(id) : s.delete(id); return s; });
 
+  // --------- FIX #1: robust contractor lookup (no 406) ----------
+  const fetchContractor = useCallback(async (emailRaw) => {
+    const emailLower = (emailRaw || "").toLowerCase();
+
+    // try exact lowercase eq
+    let { data: row, error } = await supabase
+      .from("contractors")
+      .select("*")
+      .eq("email", emailLower)
+      .maybeSingle();
+    if (row) return row;
+
+    // try exact original eq
+    if (!row && emailRaw && emailRaw !== emailLower) {
+      const res = await supabase
+        .from("contractors")
+        .select("*")
+        .eq("email", emailRaw)
+        .maybeSingle();
+      row = res.data;
+      if (row) return row;
+    }
+
+    // try case-insensitive ilike (no wildcards still matches exact, but ignore case)
+    if (!row) {
+      const res = await supabase
+        .from("contractors")
+        .select("*")
+        .ilike("email", emailLower)
+        .maybeSingle();
+      row = res.data;
+      if (row) return row;
+    }
+
+    // final fallback: ilike with wildcards
+    if (!row) {
+      const res = await supabase
+        .from("contractors")
+        .select("*")
+        .ilike("email", `%${emailLower}%`)
+        .maybeSingle();
+      row = res.data;
+    }
+    return row || null;
+  }, []);
+  // ---------------------------------------------------------------
+
   // fetch contractor + his assignments (with report, property, and tenant attachments)
   const loadData = useCallback(async () => {
     if (!user?.email) return;
     setRefreshing(true);
     try {
-      const { data: contractor, error: cErr } = await supabase
-        .from("contractors").select("*")
-        .ilike("email", user.email) // case-insensitive exact match
-        .single();
-      if (cErr || !contractor) throw new Error("No contractor profile found for this account.");
+      const contractor = await fetchContractor(user.email);
+      if (!contractor) {
+        console.warn("No contractor profile found for this account:", user.email);
+        setMe(null);
+        setAssignments([]);        // keep UI empty rather than throwing
+        return;
+      }
       setMe(contractor);
 
       const { data: rows, error: aErr } = await supabase
@@ -101,7 +150,7 @@ export default function ContractorDashboard() {
       setRefreshing(false);
       setLoading(false);
     }
-  }, [user?.email]);
+  }, [user?.email, fetchContractor]);
 
   useEffect(() => { if (authReady) loadData(); }, [authReady, loadData]);
 
@@ -296,7 +345,7 @@ export default function ContractorDashboard() {
 
   if (authReady && !user) {
     return (
-      <div className="min-h-screen grid place-items-center bg-slate-900 text-white">
+      <div className="min-h-screen grid place-items-center bg-[#0b1220] text-white">
         <div className="text-center">
           <h2 className="text-xl font-semibold mb-2">Session expired</h2>
         </div>
@@ -304,7 +353,7 @@ export default function ContractorDashboard() {
     );
   }
   if (loading) {
-    return <div className="min-h-screen grid place-items-center text-white">Loading…</div>;
+    return <div className="min-h-screen grid place-items-center text-white bg-[#0b1220]">Loading…</div>;
   }
 
   const Section = ({ title, count, children }) => (
@@ -327,7 +376,7 @@ export default function ContractorDashboard() {
     const mr = a.maintenance_reports || {};
     const prop = mr.property || {};
     return (
-      <div className="rounded-2xl border border-white/10 bg-white/[0.05] p-4 shadow-sm">
+      <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 shadow-sm">
         <div className="flex items-start justify-between">
           <div>
             <div className="text-xs text-white/50 mb-1">#{a.id.slice(0,8)}</div>
@@ -350,7 +399,7 @@ export default function ContractorDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-800 to-slate-900 text-white">
+    <div className="min-h-screen bg-[#0b1220] text-white">
       <div className="max-w-7xl mx-auto p-6">
         <header className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
