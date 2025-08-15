@@ -31,8 +31,7 @@ function countByStatus(list) {
 function latestAssignmentRow(arr) {
   if (!Array.isArray(arr) || arr.length === 0) return null;
   const scored = arr.map(a => {
-    const t =
-      new Date(a.updated_at || a.response_at || a.assigned_at || a.created_at || 0).getTime();
+    const t = new Date(a.updated_at || a.response_at || a.assigned_at || a.created_at || 0).getTime();
     return { t, a };
   });
   scored.sort((x, y) => y.t - x.t);
@@ -42,6 +41,7 @@ function latestAssignmentRow(arr) {
 const LandlordDashboard = () => {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
   const [properties, setProperties] = useState([]);
   const [reportsByProperty, setReportsByProperty] = useState({});
   const [loading, setLoading] = useState(true);
@@ -55,34 +55,42 @@ const LandlordDashboard = () => {
 
   const toggleProp = (id) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
+  // 🔐 Auth bootstrap: get user once + subscribe, don't redirect on transient null
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (mounted) setUser(user ?? null);
+      if (mounted) setAuthReady(true);
+    })();
+    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => sub?.subscription?.unsubscribe?.();
+  }, []);
+
   const loadData = useCallback(async () => {
+    if (!user?.id) return;          // no redirect here; just wait for auth
     setRefreshing(true);
     try {
-      const { data: sessionData, error } = await supabase.auth.getSession();
-      if (error || !sessionData?.session) {
-        navigate('/login');
-        return;
-      }
-      const currentUser = sessionData.session.user;
-      setUser(currentUser);
-
+      // landlord meta
       const { data: landlordConf } = await supabase
         .from('landlords')
         .select('subscription_tier, maintenance_email')
-        .eq('profile_id', currentUser.id)
+        .eq('profile_id', user.id)
         .single();
       if (landlordConf) setLandlordConfig(landlordConf);
 
-      // Properties owned by landlord
+      // properties for this landlord
       const { data: landlordProps, error: propError } = await supabase
         .from('properties')
         .select('id, name, address')
-        .eq('owner_id', currentUser.id);
+        .eq('owner_id', user.id);
       if (propError) throw propError;
 
       setProperties(landlordProps || []);
 
-      // For each property, fetch reports + nested helpdesk_assignments
+      // fetch reports per property with nested HA
       const nextReports = {};
       for (const prop of landlordProps || []) {
         const { data: propReports, error: reportError } = await supabase
@@ -102,7 +110,7 @@ const LandlordDashboard = () => {
           continue;
         }
 
-        // collect tenants
+        // tenant profiles
         const tenantIds = [...new Set((propReports || []).map(r => r.created_by).filter(Boolean))];
         let tenantMap = {};
         if (tenantIds.length) {
@@ -137,9 +145,10 @@ const LandlordDashboard = () => {
       setRefreshing(false);
       setLoading(false);
     }
-  }, [navigate]);
+  }, [user?.id]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  // initial + whenever user changes
+  useEffect(() => { if (authReady) loadData(); }, [authReady, loadData]);
 
   const openModal = (report) => {
     setModalReport(report);
@@ -197,8 +206,8 @@ const LandlordDashboard = () => {
         report_id: modalReport.id,
         tenant_email: modalTenant?.email,
         tenant_name: modalTenant?.full_name,
-        landlord_email: user.email,
-        landlord_name: user.user_metadata?.full_name || user.email || 'Landlord',
+        landlord_email: user?.email,
+        landlord_name: user?.user_metadata?.full_name || user?.email || 'Landlord',
         maintenance_email: landlordConfig.maintenance_email,
         subscription_tier: landlordConfig.subscription_tier,
         property_name,
@@ -244,8 +253,8 @@ const LandlordDashboard = () => {
         report_id: modalReport.id,
         tenant_email: modalTenant?.email,
         tenant_name: modalTenant?.full_name,
-        landlord_email: user.email,
-        landlord_name: user.user_metadata?.full_name || user.email || 'Landlord',
+        landlord_email: user?.email,
+        landlord_name: user?.user_metadata?.full_name || user?.email || 'Landlord',
         maintenance_email: landlordConfig.maintenance_email,
         subscription_tier: landlordConfig.subscription_tier,
         property_name,
@@ -267,6 +276,24 @@ const LandlordDashboard = () => {
     for (const p of properties || []) map[p.id] = countByStatus(reportsByProperty[p.id] || []);
     return map;
   }, [properties, reportsByProperty]);
+
+  // Auth gate: show a compact sign-in prompt instead of redirecting
+  if (authReady && !user) {
+    return (
+      <div className="min-h-screen grid place-items-center bg-slate-900 text-white">
+        <div className="text-center">
+          <h2 className="text-xl font-semibold mb-2">Session expired</h2>
+          <p className="text-white/70 mb-4">Please sign in again to view your properties.</p>
+          <button
+            onClick={() => navigate('/login')}
+            className="px-4 py-2 rounded-lg border border-white/20 hover:bg-white/10"
+          >
+            Go to Login
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
