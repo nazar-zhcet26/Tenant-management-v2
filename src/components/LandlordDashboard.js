@@ -1,8 +1,8 @@
 // src/components/LandlordDashboard.js
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabase';
-import { Home, AlertCircle, ClipboardList, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { Home, AlertCircle, ClipboardList, X, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 
 const statusLabels = {
   pending:  { label: 'Pending',  color: 'bg-yellow-600' },
@@ -12,7 +12,7 @@ const statusLabels = {
   rejected: { label: 'Rejected', color: 'bg-red-600' },
 };
 
-// --- helpers to compute landlord-facing status from MR + assignment ---
+// landlord-facing derived status
 function deriveLandlordStatus(mrStatus, haStatus) {
   if (mrStatus === 'rejected') return 'rejected';
   if (haStatus === 'completed') return 'fixed';
@@ -23,17 +23,27 @@ function deriveLandlordStatus(mrStatus, haStatus) {
 
 function countByStatus(list) {
   const base = { pending: 0, approved: 0, working: 0, rejected: 0, fixed: 0 };
-  for (const r of list || []) {
-    base[r._landlordStatus] = (base[r._landlordStatus] || 0) + 1;
-  }
+  for (const r of list || []) base[r._landlordStatus] = (base[r._landlordStatus] || 0) + 1;
   return base;
+}
+
+// pick the latest assignment row by timestamps
+function latestAssignmentRow(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return null;
+  const scored = arr.map(a => {
+    const t =
+      new Date(a.updated_at || a.response_at || a.assigned_at || a.created_at || 0).getTime();
+    return { t, a };
+  });
+  scored.sort((x, y) => y.t - x.t);
+  return scored[0].a;
 }
 
 const LandlordDashboard = () => {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
   const [properties, setProperties] = useState([]);
-  const [reportsByProperty, setReportsByProperty] = useState({}); // { propertyId: [reports...] }
+  const [reportsByProperty, setReportsByProperty] = useState({});
   const [loading, setLoading] = useState(true);
   const [modalReport, setModalReport] = useState(null);
   const [modalTenant, setModalTenant] = useState(null);
@@ -41,12 +51,13 @@ const LandlordDashboard = () => {
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [landlordConfig, setLandlordConfig] = useState(null);
   const [expanded, setExpanded] = useState({}); // propertyId -> bool
+  const [refreshing, setRefreshing] = useState(false);
 
   const toggleProp = (id) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
-  // fetch properties + reports
-  useEffect(() => {
-    (async () => {
+  const loadData = useCallback(async () => {
+    setRefreshing(true);
+    try {
       const { data: sessionData, error } = await supabase.auth.getSession();
       if (error || !sessionData?.session) {
         navigate('/login');
@@ -62,29 +73,25 @@ const LandlordDashboard = () => {
         .single();
       if (landlordConf) setLandlordConfig(landlordConf);
 
-      // Properties owned by this landlord
+      // Properties owned by landlord
       const { data: landlordProps, error: propError } = await supabase
         .from('properties')
         .select('id, name, address')
         .eq('owner_id', currentUser.id);
-      if (propError) {
-        console.error('Error fetching properties:', propError.message);
-        setLoading(false);
-        return;
-      }
+      if (propError) throw propError;
+
       setProperties(landlordProps || []);
 
-      // For each property, fetch MR + tenant + attachments + helpdesk assignment (joined)
+      // For each property, fetch reports + nested helpdesk_assignments
       const nextReports = {};
       for (const prop of landlordProps || []) {
         const { data: propReports, error: reportError } = await supabase
           .from('maintenance_reports')
           .select(`
-            id, title, description, category, urgency, status, created_at, property_id, location,
-            created_by,
+            id, title, description, category, urgency, status, created_at, property_id, location, created_by,
             attachments (*),
             helpdesk_assignments:helpdesk_assignments (
-              id, status, contractor_id, assigned_at, response_at, updated_at
+              id, status, contractor_id, assigned_at, response_at, updated_at, created_at
             )
           `)
           .eq('property_id', prop.id);
@@ -95,7 +102,7 @@ const LandlordDashboard = () => {
           continue;
         }
 
-        // Collect tenant profiles for this property's reports
+        // collect tenants
         const tenantIds = [...new Set((propReports || []).map(r => r.created_by).filter(Boolean))];
         let tenantMap = {};
         if (tenantIds.length) {
@@ -106,10 +113,12 @@ const LandlordDashboard = () => {
           for (const t of (tenantProfiles || [])) tenantMap[t.id] = t;
         }
 
-        // Compute derived status and attach tenant
         const enriched = (propReports || []).map(r => {
-          const ha = Array.isArray(r.helpdesk_assignments) ? r.helpdesk_assignments[0] : r.helpdesk_assignments; // normally single
-          const haStatus = ha?.status || null;
+          const haArray = Array.isArray(r.helpdesk_assignments)
+            ? r.helpdesk_assignments
+            : (r.helpdesk_assignments ? [r.helpdesk_assignments] : []);
+          const latest = latestAssignmentRow(haArray);
+          const haStatus = latest?.status || null;
           return {
             ...r,
             tenantProfile: tenantMap[r.created_by] || null,
@@ -122,9 +131,15 @@ const LandlordDashboard = () => {
       }
 
       setReportsByProperty(nextReports);
+    } catch (e) {
+      console.error('Load error:', e);
+    } finally {
+      setRefreshing(false);
       setLoading(false);
-    })();
+    }
   }, [navigate]);
+
+  useEffect(() => { loadData(); }, [loadData]);
 
   const openModal = (report) => {
     setModalReport(report);
@@ -138,36 +153,21 @@ const LandlordDashboard = () => {
   };
 
   const triggerWebhook = async (payload, actionType) => {
-    if (!landlordConfig) {
-      console.warn('No landlord config available for webhook.');
-      return;
-    }
+    if (!landlordConfig) return;
     const webhookUrl =
       actionType === 'approve'
         ? process.env.REACT_APP_N8N_LANDLORD_APPROVAL_WEBHOOK
         : process.env.REACT_APP_N8N_LANDLORD_REJECTION_WEBHOOK;
-
-    if (!webhookUrl) {
-      console.warn(`Webhook URL for ${actionType} not configured.`);
-      return;
-    }
+    if (!webhookUrl) return;
     const resp = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
     if (!resp.ok) throw new Error(`Webhook call failed with status ${resp.status}`);
   };
 
-  // approve / reject handlers (update MR + recompute derived status locally)
   const handleStatusUpdate = async () => {
-    if (!landlordConfig) {
-      alert('Landlord configuration is loading. Please wait.');
-      setStatusUpdating(false);
-      return;
-    }
-    if (!modalReport) return;
-
+    if (!landlordConfig || !modalReport) return;
     setStatusUpdating(true);
     try {
       const { error } = await supabase
@@ -176,7 +176,7 @@ const LandlordDashboard = () => {
         .eq('id', modalReport.id);
       if (error) throw error;
 
-      // Update local state for report + recompute derived status
+      // recompute derived status locally
       setReportsByProperty(prev => {
         const copy = { ...prev };
         for (const pid of Object.keys(copy)) {
@@ -189,7 +189,7 @@ const LandlordDashboard = () => {
         }
         return copy;
       });
-      setModalReport(r => r ? { ...r, status: 'approved', _landlordStatus: deriveLandlordStatus('approved', r._haStatus) } : r);
+      setModalReport(r => r ? { ...r, status: 'approved', _landlordStatus: deriveLandlordStatus('approved', r?._haStatus) } : r);
 
       const property = properties.find(p => p.id === modalReport.property_id);
       const property_name = property ? property.name : 'Unknown Property';
@@ -216,19 +216,11 @@ const LandlordDashboard = () => {
   };
 
   const handleStatusReject = async () => {
-    if (!landlordConfig) {
-      alert('Landlord configuration is loading. Please wait.');
-      setStatusUpdating(false);
-      return;
-    }
-    if (!modalReport) return;
-
+    if (!landlordConfig || !modalReport) return;
     if (modalReport.status === 'approved') {
       alert("You can't reject an approved report.");
-      setStatusUpdating(false);
       return;
     }
-
     setStatusUpdating(true);
     try {
       const { error } = await supabase
@@ -240,11 +232,7 @@ const LandlordDashboard = () => {
       setReportsByProperty(prev => {
         const copy = { ...prev };
         for (const pid of Object.keys(copy)) {
-          copy[pid] = copy[pid].map(r => {
-            if (r.id !== modalReport.id) return r;
-            const newMrStatus = 'rejected';
-            return { ...r, status: newMrStatus, _landlordStatus: 'rejected' };
-          });
+          copy[pid] = copy[pid].map(r => r.id === modalReport.id ? { ...r, status: 'rejected', _landlordStatus: 'rejected' } : r);
         }
         return copy;
       });
@@ -274,12 +262,9 @@ const LandlordDashboard = () => {
     }
   };
 
-  // derived counters per property (memoized)
   const counters = useMemo(() => {
     const map = {};
-    for (const p of properties || []) {
-      map[p.id] = countByStatus(reportsByProperty[p.id] || []);
-    }
+    for (const p of properties || []) map[p.id] = countByStatus(reportsByProperty[p.id] || []);
     return map;
   }, [properties, reportsByProperty]);
 
@@ -293,10 +278,21 @@ const LandlordDashboard = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-800 to-slate-900 text-white p-6">
-      <h1 className="text-4xl font-bold mb-6 flex items-center gap-3">
-        <ClipboardList className="w-8 h-8" />
-        Landlord Dashboard
-      </h1>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-4xl font-bold flex items-center gap-3">
+          <ClipboardList className="w-8 h-8" />
+          Landlord Dashboard
+        </h1>
+        <button
+          onClick={loadData}
+          disabled={refreshing}
+          className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/20 hover:bg-white/10 ${refreshing ? 'opacity-60 cursor-not-allowed' : ''}`}
+          title="Refresh"
+        >
+          <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+          <span className="text-sm">Refresh</span>
+        </button>
+      </div>
 
       {properties.length === 0 ? (
         <div className="flex items-center gap-2 text-gray-400">
@@ -379,7 +375,7 @@ const LandlordDashboard = () => {
         })
       )}
 
-      {/* Modal stays largely the same; show derived status chip */}
+      {/* Modal */}
       {modalReport && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60">
           <div className="relative bg-white text-gray-900 rounded-xl shadow-2xl p-8 max-w-2xl w-full">
@@ -459,30 +455,22 @@ const LandlordDashboard = () => {
 
 export default LandlordDashboard;
 
-/* ------------ helpers: attachments + signed URL (unchanged) ------------- */
+/* ------------ attachments (signed URL) ------------- */
 function AttachmentImage({ att }) {
   const [url, setUrl] = React.useState('');
-  React.useEffect(() => {
-    (async () => { setUrl(await getSignedUrl(att)); })();
-  }, [att]);
+  React.useEffect(() => { (async () => setUrl(await getSignedUrl(att)))(); }, [att]);
   if (!url) return <div className="w-28 h-28 bg-gray-100 rounded" />;
   return (
     <a href={url} target="_blank" rel="noopener noreferrer">
-      <img
-        src={url}
-        alt={att.file_name}
-        className="w-28 h-28 object-cover rounded"
-        onError={(e) => { e.currentTarget.src = 'https://via.placeholder.com/112'; }}
-      />
+      <img src={url} alt={att.file_name} className="w-28 h-28 object-cover rounded"
+           onError={(e) => { e.currentTarget.src = 'https://via.placeholder.com/112'; }} />
       <div className="text-xs mt-1 text-center">{att.file_name}</div>
     </a>
   );
 }
 function AttachmentVideo({ att }) {
   const [url, setUrl] = React.useState('');
-  React.useEffect(() => {
-    (async () => { setUrl(await getSignedUrl(att)); })();
-  }, [att]);
+  React.useEffect(() => { (async () => setUrl(await getSignedUrl(att)))(); }, [att]);
   if (!url) return <div className="w-28 h-28 bg-gray-100 rounded" />;
   return (
     <a href={url} target="_blank" rel="noopener noreferrer">
@@ -494,9 +482,7 @@ function AttachmentVideo({ att }) {
 async function getSignedUrl(att) {
   if (att.url && att.url.includes('token=')) return att.url;
   if (att.file_path) {
-    const { data } = await supabase.storage
-      .from('maintenance-files')
-      .createSignedUrl(att.file_path, 60 * 60);
+    const { data } = await supabase.storage.from('maintenance-files').createSignedUrl(att.file_path, 3600);
     return data?.signedUrl || '';
   }
   return '';
