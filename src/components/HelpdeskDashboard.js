@@ -2,18 +2,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase";
 import {
-  RefreshCcw, Users, Building2, Info, ClipboardList, UserPlus, CheckCircle2,
-  Undo2, FileText, Paperclip, Phone, Mail, ShieldAlert, FileUp, Eye
+  RefreshCcw, Building2, Info, UserPlus, CheckCircle2, Undo2,
+  ClipboardList, FileText, FileUp, Eye, Mail, Phone, ShieldAlert, Tag
 } from "lucide-react";
 
 /** ====== CONFIG ====== */
 const ATTACHMENTS_BUCKET = "maintenance-files"; // private bucket
 
 /** ====== UTILS ====== */
-function classNames(...xs) { return xs.filter(Boolean).join(" "); }
-function formatDate(s) { try { return new Date(s).toLocaleString(); } catch { return s || "—"; } }
-function cents(n) { const v = Number(n || 0); return Math.round(v * 100) / 100; }
-
+const cn = (...xs) => xs.filter(Boolean).join(" ");
+const fmtDate = (s) => { try { return new Date(s).toLocaleString(); } catch { return s || "—"; } };
 async function loadJsPDF() {
   if (window.jspdf?.jsPDF) return window.jspdf.jsPDF;
   await new Promise((res, rej) => {
@@ -25,8 +23,18 @@ async function loadJsPDF() {
   return window.jspdf.jsPDF;
 }
 
+/** Status colors (badge + subtle card accent) */
+const STATUS = {
+  pending:   { badge: "bg-amber-500/15 text-amber-300 border border-amber-500/30", ring: "ring-amber-500/20" },
+  assigned:  { badge: "bg-sky-500/15 text-sky-300 border border-sky-500/30",       ring: "ring-sky-500/20" },
+  accepted:  { badge: "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30", ring: "ring-emerald-500/20" },
+  review:    { badge: "bg-violet-500/15 text-violet-300 border border-violet-500/30",     ring: "ring-violet-500/20" },
+  completed: { badge: "bg-teal-500/15 text-teal-300 border border-teal-500/30",           ring: "ring-teal-500/20" },
+  rejected:  { badge: "bg-rose-500/15 text-rose-300 border border-rose-500/30",           ring: "ring-rose-500/20" },
+};
+
 export default function HelpdeskDashboard() {
-  // auth (stable, no flicker)
+  // auth
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
 
@@ -44,14 +52,14 @@ export default function HelpdeskDashboard() {
   const [detailsFor, setDetailsFor] = useState(null);
   const [assignFor, setAssignFor] = useState(null);
 
-  // contractors (for assign modal)
+  // contractors list for modal
   const [contractors, setContractors] = useState([]);
   const [rejectedBy, setRejectedBy] = useState(new Set());
 
-  // signed URLs cache
+  // signed urls cache
   const [signed, setSigned] = useState({});
 
-  /* ───────── auth bootstrap ───────── */
+  /* auth bootstrap */
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -62,7 +70,7 @@ export default function HelpdeskDashboard() {
     return () => sub?.subscription?.unsubscribe?.();
   }, []);
 
-  /* ───────── data load ───────── */
+  /* load */
   const loadData = useCallback(async () => {
     setRefreshing(true);
     try {
@@ -71,7 +79,7 @@ export default function HelpdeskDashboard() {
         .select(`
           id, status, assigned_at, response_at, updated_at, reassignment_count,
           report_id, landlord_id, contractor_id,
-          contractor:contractor_id ( id, full_name, email, phone ),
+          contractor:contractor_id ( id, full_name, email, phone, services_provided ),
           maintenance_reports:report_id (
             id, title, description, category, urgency, status, created_at, location, address, property_id,
             property:property_id ( id, name, address ),
@@ -91,7 +99,7 @@ export default function HelpdeskDashboard() {
 
   useEffect(() => { if (authReady) loadData(); }, [authReady, loadData]);
 
-  /* ───────── signed URL helper ───────── */
+  /* signed url helper */
   const getSigned = useCallback(async (path) => {
     if (!path) return null;
     if (signed[path]) return signed[path];
@@ -101,7 +109,7 @@ export default function HelpdeskDashboard() {
     return data?.signedUrl || null;
   }, [signed]);
 
-  /* ───────── filters ───────── */
+  /* filters */
   const propertyOptions = useMemo(() => {
     const set = new Map();
     assignments.forEach(a => {
@@ -127,7 +135,7 @@ export default function HelpdeskDashboard() {
 
   const refresh = () => loadData();
 
-  /* ───────── actions ───────── */
+  /* actions */
   const markCompleted = async (a) => {
     try {
       const now = new Date().toISOString();
@@ -137,7 +145,9 @@ export default function HelpdeskDashboard() {
         .eq("id", a.id);
       if (error) throw error;
       await loadData();
-    } catch (e) { alert("Failed to mark completed: " + (e.message || "Please try again.")); }
+    } catch (e) {
+      alert("Failed to mark completed: " + (e.message || "Please try again."));
+    }
   };
 
   const reopenToPending = async (a) => {
@@ -155,14 +165,15 @@ export default function HelpdeskDashboard() {
         .eq("id", a.id);
       if (error) throw error;
       await loadData();
-    } catch (e) { alert("Failed to reopen: " + (e.message || "Please try again.")); }
+    } catch (e) {
+      alert("Failed to reopen: " + (e.message || "Please try again."));
+    }
   };
 
   const openAssign = async (a) => {
     setAssignFor(a);
-    // preload contractors and "rejected" set for this assignment
     const [ctr, rej] = await Promise.all([
-      supabase.from("contractors").select("id, full_name, email, phone").order("full_name", { ascending: true }),
+      supabase.from("contractors").select("id, full_name, email, phone, services_provided").order("full_name", { ascending: true }),
       supabase.from("contractor_responses").select("contractor_id").eq("assignment_id", a.id).eq("response", "rejected")
     ]);
     setContractors(ctr.data || []);
@@ -172,7 +183,6 @@ export default function HelpdeskDashboard() {
   const doAssign = async (assignment, contractorId) => {
     if (!assignment?.id || !contractorId) return;
     try {
-      // increment only if previously assigned and the id changes
       const prevId = assignment.contractor_id;
       const change = !!(prevId && prevId !== contractorId);
 
@@ -197,8 +207,7 @@ export default function HelpdeskDashboard() {
     }
   };
 
-  /* ───────── UI ───────── */
-
+  /* UI */
   if (authReady && !user) {
     return (
       <div className="min-h-screen grid place-items-center bg-[#0b1220] text-white">
@@ -208,9 +217,7 @@ export default function HelpdeskDashboard() {
       </div>
     );
   }
-  if (loading) {
-    return <div className="min-h-screen grid place-items-center text-white bg-[#0b1220]">Loading…</div>;
-  }
+  if (loading) return <div className="min-h-screen grid place-items-center text-white bg-[#0b1220]">Loading…</div>;
 
   return (
     <div className="min-h-screen bg-[#0b1220] text-white">
@@ -223,12 +230,12 @@ export default function HelpdeskDashboard() {
           <button
             onClick={refresh}
             disabled={refreshing}
-            className={classNames(
+            className={cn(
               "inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/20 hover:bg-white/10",
               refreshing && "opacity-60 cursor-not-allowed"
             )}
           >
-            <RefreshCcw className={classNames("w-4 h-4", refreshing && "animate-spin")} />
+            <RefreshCcw className={cn("w-4 h-4", refreshing && "animate-spin")} />
             <span className="text-sm">Refresh</span>
           </button>
         </header>
@@ -257,28 +264,45 @@ export default function HelpdeskDashboard() {
           />
         </div>
 
-        {/* List */}
+        {/* Cards */}
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map(a => {
             const mr = a.maintenance_reports || {};
             const prop = mr.property || {};
+            const s = STATUS[a.status] || STATUS.pending;
+
             return (
-              <div key={a.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 shadow-sm">
+              <div
+                key={a.id}
+                className={cn(
+                  "rounded-2xl p-4 shadow-sm border bg-white/[0.03]",
+                  "border-white/10 hover:border-white/20 transition",
+                  "ring-1", s.ring
+                )}
+              >
                 <div className="flex items-start justify-between">
                   <div>
                     <div className="text-xs text-white/50 mb-1">#{a.id.slice(0,8)}</div>
-                    <div className="text-lg font-semibold">{mr.title || mr.category || "Maintenance Request"}</div>
-                    <div className="text-sm text-white/70">
+                    <div className="text-lg font-semibold">{mr.title || "Maintenance Request"}</div>
+
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-white/5 border border-white/10">
+                        <Tag className="w-3 h-3" /> {mr.category || "—"}
+                      </span>
+                      <span className="text-xs text-white/60">Urgency: {mr.urgency || "—"}</span>
+                    </div>
+
+                    <div className="text-sm text-white/70 mt-1">
                       {prop.name || "—"} • {prop.address || mr.address || "—"} • Unit {mr.location || "—"}
                     </div>
-                    <div className="text-xs text-white/50">Created: {formatDate(mr.created_at)}</div>
-                    <div className="text-xs text-white/50">Urgency: {mr.urgency || "—"}</div>
+                    <div className="text-xs text-white/50">Created: {fmtDate(mr.created_at)}</div>
                     <div className="text-xs text-white/50">Reassignments: {a.reassignment_count || 0}</div>
                   </div>
-                  <span className="text-xs px-2 py-1 rounded-full bg-white/10 border border-white/10">{a.status}</span>
+
+                  <span className={cn("text-xs px-2 py-1 rounded-full", s.badge)}>{a.status}</span>
                 </div>
 
-                <div className="mt-3 flex items-center gap-2">
+                <div className="mt-3 flex flex-wrap items-center gap-2">
                   <button className="text-sm px-3 py-1.5 rounded-lg border border-white/10 hover:bg-white/10"
                     onClick={() => setDetailsFor(a)}
                   >
@@ -354,7 +378,7 @@ function DetailsModal({ assignment, onClose, getSigned }) {
   const [parts, setParts] = useState([]);
   const [contractorAttachments, setContractorAttachments] = useState([]);
 
-  // invoice state
+  // invoice
   const [invoiceUrl, setInvoiceUrl] = useState(null);
   const [invoicePath, setInvoicePath] = useState(null);
   const [generating, setGenerating] = useState(false);
@@ -385,7 +409,7 @@ function DetailsModal({ assignment, onClose, getSigned }) {
         setParts(pr || []);
         setContractorAttachments(att || []);
 
-        // if an invoice is already stored as attachment, surface it
+        // surface existing invoice if present
         const invoice = (att || []).find(x => (x.file_type === "pdf") && x.file_path?.includes("/invoices/"));
         if (invoice?.file_path) {
           const { data: s } = await supabase.storage.from(ATTACHMENTS_BUCKET).createSignedUrl(invoice.file_path, 3600);
@@ -409,7 +433,6 @@ function DetailsModal({ assignment, onClose, getSigned }) {
       const margin = 48; let y = margin;
       const add = (text, opts={}) => { doc.setFontSize(opts.size || 11); doc.text(String(text), margin, y); y += opts.line || 18; };
 
-      // Header
       doc.setFont("helvetica", "bold");
       add("INVOICE", { size: 18, line: 26 });
       doc.setFont("helvetica", "normal");
@@ -417,7 +440,6 @@ function DetailsModal({ assignment, onClose, getSigned }) {
       add(`Property: ${prop?.name || "—"} — ${prop?.address || mr.address || "—"} — Unit ${mr.location || "—"}`);
       add(`Date: ${new Date().toLocaleDateString()}`, { line: 24 });
 
-      // Summary
       doc.setFont("helvetica", "bold"); add("Job Summary", { line: 20 });
       doc.setFont("helvetica", "normal");
       add(`Appliance: ${finalReport.appliance_name || "—"}`);
@@ -433,7 +455,6 @@ function DetailsModal({ assignment, onClose, getSigned }) {
       // Parts table
       doc.setFont("helvetica", "bold"); add("Parts", { line: 20 });
       doc.setFont("helvetica", "normal");
-      const headerY = y;
       doc.text("Part", margin, y);
       doc.text("Brand", margin + 220, y);
       doc.text("Qty", margin + 350, y);
@@ -454,7 +475,6 @@ function DetailsModal({ assignment, onClose, getSigned }) {
 
       y += 10; doc.line(margin, y, 560, y); y += 16;
 
-      // Totals
       const subtotal = Number(finalReport.parts_subtotal || 0);
       const vatPct = (Number(finalReport.tax_rate || 0) * 100);
       const total = Number(finalReport.total_cost || subtotal);
@@ -474,10 +494,11 @@ function DetailsModal({ assignment, onClose, getSigned }) {
         .upload(storagePath, blob, { contentType: "application/pdf", upsert: true });
       if (upErr) throw upErr;
 
-      // Register in attachments (tie to final report)
+      // Register in attachments:
+      // IMPORTANT: satisfy "one_fk_only" → ONLY contractor_final_report_id (report_id MUST be null)
       const { error: insErr } = await supabase.from("attachments").insert({
         contractor_final_report_id: finalReport.id,
-        report_id: a.report_id,
+        report_id: null,                        // <-- critical fix
         file_name: fileName,
         file_path: storagePath,
         file_type: "pdf",
@@ -485,7 +506,6 @@ function DetailsModal({ assignment, onClose, getSigned }) {
       });
       if (insErr) throw insErr;
 
-      // Signed URL for viewing
       const { data: s } = await supabase.storage.from(ATTACHMENTS_BUCKET).createSignedUrl(storagePath, 3600);
       setInvoiceUrl(s?.signedUrl || null);
       setInvoicePath(storagePath);
@@ -529,21 +549,21 @@ function DetailsModal({ assignment, onClose, getSigned }) {
         <button className="absolute top-4 right-4 text-white/70 hover:text-white" onClick={onClose}>✕</button>
 
         <div className="grid lg:grid-cols-2 gap-6">
-          {/* Left: Tenant report */}
+          {/* Left: tenant report */}
           <div>
             <div className="flex items-center gap-2 mb-2">
               <ClipboardList className="w-5 h-5 text-blue-400" />
-              <h3 className="text-xl font-semibold">{mr.title || mr.category || "Maintenance Request"}</h3>
+              <h3 className="text-xl font-semibold">{mr.title || "Maintenance Request"}</h3>
             </div>
             <div className="text-sm text-white/70 mb-1">{prop.name || "—"} • {prop.address || mr.address || "—"}</div>
-            <div className="text-sm text-white/70 mb-3">Unit: {mr.location || "—"} • Urgency: {mr.urgency || "—"}</div>
+            <div className="text-sm text-white/70 mb-3">Unit: {mr.location || "—"} • Urgency: {mr.urgency || "—"} • Category: {mr.category || "—"}</div>
             <p className="text-white/90 whitespace-pre-wrap mb-4">{mr.description || "—"}</p>
 
-            {tenantAttachments?.length > 0 && (
+            { (mr.attachments||[])?.length > 0 && (
               <>
                 <div className="font-semibold mb-2">Tenant Attachments</div>
                 <div className="grid grid-cols-3 gap-3">
-                  {tenantAttachments.map(att => (
+                  { (mr.attachments||[]).map(att => (
                     <AttachmentThumb key={att.id} att={att} getSigned={getSigned} />
                   ))}
                 </div>
@@ -551,7 +571,7 @@ function DetailsModal({ assignment, onClose, getSigned }) {
             )}
           </div>
 
-          {/* Right: Contractor final report + invoice */}
+          {/* Right: contractor final report + invoice */}
           <div className="bg-white/5 rounded-xl p-4 border border-white/10">
             <div className="flex items-center gap-2 mb-3">
               <FileText className="w-5 h-5 text-emerald-400" />
@@ -559,9 +579,7 @@ function DetailsModal({ assignment, onClose, getSigned }) {
             </div>
 
             {!finalReport ? (
-              <div className="text-sm text-white/70">
-                Waiting for contractor’s final report…
-              </div>
+              <div className="text-sm text-white/70">Waiting for contractor’s final report…</div>
             ) : (
               <>
                 <div className="grid sm:grid-cols-2 gap-3 text-sm">
@@ -602,8 +620,7 @@ function DetailsModal({ assignment, onClose, getSigned }) {
                   </div>
                 )}
 
-                {/* Contractor evidence */}
-                {contractorAttachments?.length > 0 && (
+                {(contractorAttachments||[])?.length > 0 && (
                   <>
                     <div className="font-semibold mt-6 mb-2">Contractor Evidence</div>
                     <div className="grid grid-cols-3 gap-3">
@@ -614,7 +631,6 @@ function DetailsModal({ assignment, onClose, getSigned }) {
                   </>
                 )}
 
-                {/* Invoice actions */}
                 <div className="mt-6 flex flex-wrap items-center gap-2">
                   <button
                     onClick={generateInvoice}
@@ -643,7 +659,6 @@ function DetailsModal({ assignment, onClose, getSigned }) {
                       disabled={sending}
                       className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-60"
                     >
-                      <Paperclip className="w-4 h-4" />
                       {sending ? "Sending…" : "Send Invoice"}
                     </button>
                   )}
@@ -678,24 +693,34 @@ function AttachmentThumb({ att, getSigned }) {
 
 function AssignModal({ assignment, onClose, contractors, rejectedBy, onAssign }) {
   const [choice, setChoice] = useState(assignment?.contractor_id || "");
+  const mr = assignment?.maintenance_reports || {};
+  const ticketCategory = (mr.category || "").toLowerCase();
+
   return (
     <div className="fixed inset-0 z-50 bg-black/60 grid place-items-center p-4">
       <div className="bg-[#0f172a] text-white rounded-2xl shadow-xl max-w-lg w-full p-6 relative">
         <button className="absolute top-4 right-4 text-white/70 hover:text-white" onClick={onClose}>✕</button>
-        <div className="flex items-center gap-2 mb-4">
-          <Users className="w-5 h-5 text-blue-400" />
-          <h3 className="text-xl font-semibold">Assign Contractor</h3>
+        <div className="mb-4">
+          <div className="text-xl font-semibold flex items-center gap-2">
+            <UserPlus className="w-5 h-5 text-blue-400" /> Assign Contractor
+          </div>
+          <div className="text-sm text-white/70 mt-1">
+            Category required: <span className="font-medium text-white">{mr.category || "—"}</span>
+          </div>
+          <div className="text-xs text-white/50 mt-1">
+            Contractors who previously <span className="text-rose-300 font-medium">rejected</span> or don’t serve this category are disabled.
+          </div>
         </div>
 
-        <div className="text-sm text-white/70 mb-3">
-          Select a contractor. Those who previously <span className="text-rose-300 font-medium">rejected</span> this request are disabled.
-        </div>
-
-        <div className="space-y-2 mb-4 max-h-72 overflow-y-auto pr-1">
+        <div className="space-y-2 mb-4 max-h-80 overflow-y-auto pr-1">
           {contractors.map(c => {
-            const disabled = rejectedBy.has(c.id);
+            const services = Array.isArray(c.services_provided) ? c.services_provided.map(s => (s || "").toLowerCase()) : [];
+            const categoryOk = ticketCategory ? services.includes(ticketCategory) : true;
+            const rejected = rejectedBy.has(c.id);
+            const disabled = rejected || !categoryOk;
+
             return (
-              <label key={c.id} className={classNames(
+              <label key={c.id} className={cn(
                 "flex items-start gap-3 p-3 rounded-lg border",
                 disabled ? "border-white/10 bg-white/[0.04] opacity-60 cursor-not-allowed" : "border-white/10 hover:bg-white/10 cursor-pointer"
               )}>
@@ -713,9 +738,14 @@ function AssignModal({ assignment, onClose, contractors, rejectedBy, onAssign })
                     <span className="inline-flex items-center gap-1"><Mail className="w-3 h-3" /> {c.email}</span>
                     {c.phone && <span className="inline-flex items-center gap-1"><Phone className="w-3 h-3" /> {c.phone}</span>}
                   </div>
-                  {disabled && (
+                  {rejected && (
                     <div className="text-xs text-rose-300 mt-1 inline-flex items-center gap-1">
-                      <ShieldAlert className="w-3 h-3" /> rejected this ticket before
+                      <ShieldAlert className="w-3 h-3" /> rejected this ticket
+                    </div>
+                  )}
+                  {!rejected && !categoryOk && (
+                    <div className="text-xs text-amber-300 mt-1 inline-flex items-center gap-1">
+                      <ShieldAlert className="w-3 h-3" /> not in services for {mr.category}
                     </div>
                   )}
                 </div>
