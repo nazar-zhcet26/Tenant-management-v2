@@ -216,6 +216,16 @@ const MaintenanceReporter = () => {
       console.error('Error notifying n8n:', error);
     }
   }
+    const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    const files = Array.from(e.dataTransfer.files);
+    const images = files.filter(file => file.type.startsWith('image/'));
+    const videos = files.filter(file => file.type.startsWith('video/'));
+    if (images.length > 0) handleFileUpload(images, 'photos');
+    if (videos.length > 0) handleFileUpload(videos, 'videos');
+  };
 
   // 🟢 Submit with mandatory Unit/Apartment enforced
   const submitReport = async () => {
