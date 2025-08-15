@@ -1,3 +1,4 @@
+// src/components/MaintenanceReporter.js
 import React, { useState, useEffect, useRef } from 'react';
 import { maintenanceAPI } from '../supabase';
 import { supabase } from '../supabase';
@@ -30,10 +31,10 @@ const urgencyLevels = {
 const MaintenanceReporter = () => {
   const navigate = useNavigate();
   const [reports, setReports] = useState([]);
-  const [properties, setProperties] = useState([]); // NEW
+  const [properties, setProperties] = useState([]);
   const [currentReport, setCurrentReport] = useState({
     id: null,
-    property_id: '', // NEW
+    property_id: '',
     title: '',
     description: '',
     category: '',
@@ -56,7 +57,6 @@ const MaintenanceReporter = () => {
 
   // Fetch properties and existing reports on mount
   useEffect(() => {
-    // Fetch all properties for dropdown
     (async () => {
       try {
         const { data: propertyData, error: propError } = await supabase
@@ -69,7 +69,6 @@ const MaintenanceReporter = () => {
       }
     })();
 
-    // Fetch reports as before
     (async () => {
       try {
         const data = await maintenanceAPI.getReports();
@@ -83,8 +82,6 @@ const MaintenanceReporter = () => {
   const handleInputChange = (field, value) => {
     setCurrentReport(prev => ({ ...prev, [field]: value }));
   };
-
-  // --- The rest of your code is unchanged ---
 
   const getCurrentLocation = () => {
     if (!navigator.geolocation) {
@@ -199,191 +196,164 @@ const MaintenanceReporter = () => {
     else if (e.type === "dragleave") setDragActive(false);
   };
 
-
-  // Helper function to send webhook
-async function notifyReportSubmission(data) {
-  const webhookUrl = process.env.REACT_APP_N8N_REPORT_SUBMISSION_WEBHOOK;
-  if (!webhookUrl) {
-    console.warn('N8N webhook URL not configured.');
-    return;
-  }
-  try {
-    console.log('Sending webhook to:', webhookUrl);
-    console.log('Payload:', data);
-    const response = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    console.log('Webhook response status:', response.status);
-    if (!response.ok) {
-      console.error('Failed to notify n8n:', response.statusText);
+  // Helper: notify n8n on report submission
+  async function notifyReportSubmission(data) {
+    const webhookUrl = process.env.REACT_APP_N8N_REPORT_SUBMISSION_WEBHOOK;
+    if (!webhookUrl) {
+      console.warn('N8N webhook URL not configured.');
+      return;
     }
-  } catch (error) {
-    console.error('Error notifying n8n:', error);
-  }
-};
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    const files = Array.from(e.dataTransfer.files);
-    const images = files.filter(file => file.type.startsWith('image/'));
-    const videos = files.filter(file => file.type.startsWith('video/'));
-    if (images.length > 0) handleFileUpload(images, 'photos');
-    if (videos.length > 0) handleFileUpload(videos, 'videos');
-  };
-
-  // 🟢 ADD property_id and created_by when submitting
-  const submitReport = async () => {
-  if (
-    !currentReport.property_id ||
-    !currentReport.title?.trim() ||
-    !currentReport.description?.trim() ||
-    !currentReport.category ||
-    !currentReport.location?.trim()
-  ) {
-    alert('Please fill in all required fields (including Property, Title, Description, Category, and Unit/Apartment).');
-    return;
-  }
-  setIsSubmitting(true);
-  try {
-    const { data, error } = await supabase.auth.getUser();
-    if (error) throw error;
-    const user = data.user;
-    if (!user) throw new Error('No authenticated user');
-
-    // Save the report
-    const saved = await maintenanceAPI.submitReport({
-      property_id: currentReport.property_id,
-      title: currentReport.title,
-      description: currentReport.description,
-      category: currentReport.category,
-      location: currentReport.location,
-      urgency: currentReport.urgency,
-      coordinates: currentReport.coordinates,
-      address: currentReport.address,
-      created_by: user.id
-    });
-
-    // Upload attachments
-    const attachments = [];
-    for (let photo of currentReport.photos) {
-      const { path, url } = await maintenanceAPI.uploadFile(photo.file, saved.id);
-      const att = await maintenanceAPI.saveAttachment({
-        report_id: saved.id,
-        file_name: photo.name,
-        file_path: path,
-        file_type: 'image',
-        file_size: photo.size,
-        duration: null
-      });
-      attachments.push({ ...att, url });
-    }
-    for (let video of currentReport.videos) {
-      const { path, url } = await maintenanceAPI.uploadFile(video.file, saved.id);
-      const att = await maintenanceAPI.saveAttachment({
-        report_id: saved.id,
-        file_name: video.name,
-        file_path: path,
-        file_type: 'video',
-        file_size: video.size,
-        duration: video.duration
-      });
-      attachments.push({ ...att, url });
-    }
-
-    setReports(prev => [
-      {
-        ...saved,
-        attachments,
-        dateSubmitted: saved.created_at
-      },
-      ...prev
-    ]);
-
-    setCurrentReport({
-      id: null,
-      property_id: '',
-      title: '',
-      description: '',
-      category: '',
-      location: '',
-      urgency: 'medium',
-      photos: [],
-      videos: [],
-      status: 'pending',
-      dateSubmitted: null,
-      coordinates: null,
-      address: ''
-    });
-
-    const canSubmit =
-  !!(currentReport?.property_id &&
-     currentReport?.title?.trim() &&
-     currentReport?.description?.trim() &&
-     currentReport?.category &&
-     currentReport?.location?.trim());
-
-
-    alert('✅ Maintenance request submitted!');
-
-    // Fetch landlord info based on property_id
-    let landlord_email = '';
-    let landlord_name = '';
-
     try {
-      const { data: propertyData, error: propertyError } = await supabase
-        .from('properties')
-        .select('owner_id')
-        .eq('id', currentReport.property_id)
-        .single();
-
-      if (propertyError) throw propertyError;
-
-      if (propertyData?.owner_id) {
-        const { data: landlordData, error: landlordError } = await supabase
-          .from('profiles')
-          .select('full_name, email')
-          .eq('id', propertyData.owner_id)
-          .single();
-
-        if (landlordError) throw landlordError;
-
-        landlord_email = landlordData?.email || '';
-        landlord_name = landlordData?.full_name || '';
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (!response.ok) {
+        console.error('Failed to notify n8n:', response.statusText);
       }
     } catch (error) {
-      console.error('Error fetching landlord info:', error.message);
+      console.error('Error notifying n8n:', error);
+    }
+  }
+
+  // 🟢 Submit with mandatory Unit/Apartment enforced
+  const submitReport = async () => {
+    if (
+      !currentReport.property_id ||
+      !currentReport.title?.trim() ||
+      !currentReport.description?.trim() ||
+      !currentReport.category ||
+      !currentReport.location?.trim()
+    ) {
+      alert('Please fill in all required fields (Property, Title, Description, Category, and Unit/Apartment).');
+      return;
     }
 
-    // Build webhook payload with updated URLs
-    const payload = {
-      report_id: saved.id,
-      property_id: currentReport.property_id,
-      property_name: properties.find(p => p.id === currentReport.property_id)?.name || '',
-      tenant_email: user.email,
-      tenant_name: user.user_metadata?.full_name || 'Tenant',
-      landlord_email,
-      landlord_name,
-      report_category: currentReport.category,
-      report_title: currentReport.title,
-      report_url: `${window.location.origin}/my-reports`,
-      landlord_portal_url: `${window.location.origin}/dashboard`
-    };
+    setIsSubmitting(true);
+    try {
+      const { data, error } = await supabase.auth.getUser();
+      if (error) throw error;
+      const user = data.user;
+      if (!user) throw new Error('No authenticated user');
 
-    // Call webhook
-    await notifyReportSubmission(payload);
+      // Save the report
+      const saved = await maintenanceAPI.submitReport({
+        property_id: currentReport.property_id,
+        title: currentReport.title,
+        description: currentReport.description,
+        category: currentReport.category,
+        location: currentReport.location,
+        urgency: currentReport.urgency,
+        coordinates: currentReport.coordinates,
+        address: currentReport.address,
+        created_by: user.id
+      });
 
-  } catch (error) {
-    console.error('Submit error:', error);
-    alert(error.message);
-  } finally {
-    setIsSubmitting(false);
-  }
-};
+      // Upload attachments
+      const attachments = [];
+      for (let photo of currentReport.photos) {
+        const { path, url } = await maintenanceAPI.uploadFile(photo.file, saved.id);
+        const att = await maintenanceAPI.saveAttachment({
+          report_id: saved.id,
+          file_name: photo.name,
+          file_path: path,
+          file_type: 'image',
+          file_size: photo.size,
+          duration: null
+        });
+        attachments.push({ ...att, url });
+      }
+      for (let video of currentReport.videos) {
+        const { path, url } = await maintenanceAPI.uploadFile(video.file, saved.id);
+        const att = await maintenanceAPI.saveAttachment({
+          report_id: saved.id,
+          file_name: video.name,
+          file_path: path,
+          file_type: 'video',
+          file_size: video.size,
+          duration: video.duration
+        });
+        attachments.push({ ...att, url });
+      }
 
+      // Optimistic prepend
+      setReports(prev => [
+        {
+          ...saved,
+          attachments,
+          dateSubmitted: saved.created_at
+        },
+        ...prev
+      ]);
+
+      // Reset form
+      setCurrentReport({
+        id: null,
+        property_id: '',
+        title: '',
+        description: '',
+        category: '',
+        location: '',
+        urgency: 'medium',
+        photos: [],
+        videos: [],
+        status: 'pending',
+        dateSubmitted: null,
+        coordinates: null,
+        address: ''
+      });
+
+      alert('✅ Maintenance request submitted!');
+
+      // Fetch landlord info for n8n payload
+      let landlord_email = '';
+      let landlord_name = '';
+      try {
+        const { data: propertyData, error: propertyError } = await supabase
+          .from('properties')
+          .select('owner_id')
+          .eq('id', saved.property_id)
+          .single();
+        if (propertyError) throw propertyError;
+
+        if (propertyData?.owner_id) {
+          const { data: landlordData, error: landlordError } = await supabase
+            .from('profiles')
+            .select('full_name, email')
+            .eq('id', propertyData.owner_id)
+            .single();
+          if (landlordError) throw landlordError;
+          landlord_email = landlordData?.email || '';
+          landlord_name = landlordData?.full_name || '';
+        }
+      } catch (e) {
+        console.error('Error fetching landlord info:', e.message);
+      }
+
+      // Build webhook payload
+      const payload = {
+        report_id: saved.id,
+        property_id: saved.property_id,
+        property_name: properties.find(p => p.id === saved.property_id)?.name || '',
+        tenant_email: user.email,
+        tenant_name: user.user_metadata?.full_name || 'Tenant',
+        landlord_email,
+        landlord_name,
+        report_category: saved.category,
+        report_title: saved.title,
+        report_url: `${window.location.origin}/my-reports`,
+        landlord_portal_url: `${window.location.origin}/dashboard`
+      };
+
+      await notifyReportSubmission(payload);
+    } catch (error) {
+      console.error('Submit error:', error);
+      alert(error.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const formatFileSize = (bytes) => {
     if (!bytes) return '0 Bytes';
@@ -399,6 +369,14 @@ async function notifyReportSubmission(data) {
   };
   const selectedCategory = categories.find(cat => cat.id === currentReport.category);
   const selectedUrgency = urgencyLevels[currentReport.urgency];
+
+  // ✅ Compute canSubmit once per render so we can disable the button
+  const canSubmit =
+    !!(currentReport?.property_id &&
+       currentReport?.title?.trim() &&
+       currentReport?.description?.trim() &&
+       currentReport?.category &&
+       currentReport?.location?.trim());
 
   // --- RENDER ---
   return (
@@ -537,8 +515,11 @@ async function notifyReportSubmission(data) {
                   onChange={e => handleInputChange('location', e.target.value)}
                   placeholder="e.g., Apartment 1204-B, bathroom (required)"
                   required
-                  className="w-full px-6 py-4 bg-white/10 backdrop-blur border border-white/20 rounded-xl text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300"/>
-                  {!currentReport.location?.trim() && (<p className="mt-1 text-xs text-red-300">Unit/Apartment is required.</p>)}  
+                  className="w-full px-6 py-4 bg-white/10 backdrop-blur border border-white/20 rounded-xl text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300"
+                />
+                {!currentReport.location?.trim() && (
+                  <p className="mt-1 text-xs text-red-300">Unit/Apartment is required.</p>
+                )}
               </div>
               {/* GPS Location */}
               <div>
@@ -630,6 +611,7 @@ async function notifyReportSubmission(data) {
                 </div>
               </div>
             </div>
+
             {/* Description */}
             <div className="mb-8">
               <label className="block text-white font-semibold mb-3">
@@ -643,6 +625,7 @@ async function notifyReportSubmission(data) {
                 className="w-full px-6 py-4 bg-white/10 backdrop-blur border border-white/20 rounded-xl text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300 resize-none"
               />
             </div>
+
             {/* File Upload */}
             <div className="mb-8">
               <label className="block text-white font-semibold mb-4">
@@ -707,6 +690,7 @@ async function notifyReportSubmission(data) {
                 className="hidden"
               />
             </div>
+
             {(currentReport.photos.length > 0 || currentReport.videos.length > 0) && (
               <div className="mb-8">
                 <h3 className="text-xl font-bold text-white mb-6 flex items-center">
@@ -783,30 +767,31 @@ async function notifyReportSubmission(data) {
                 )}
               </div>
             )}
+
             <div className="flex justify-end">
               <button
-  onClick={submitReport}
-  disabled={isSubmitting || !canSubmit}
-  className={`px-12 py-4 font-bold rounded-xl transition-all duration-300 flex items-center space-x-3 text-lg ${
-    isSubmitting || !canSubmit
-      ? 'bg-gray-600 cursor-not-allowed opacity-60'
-      : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 shadow-lg shadow-green-500/25 hover:shadow-green-500/40 transform hover:scale-105'
-  } text-white`}
->
-  {isSubmitting ? (
-    <>
-      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-      <span>Submitting...</span>
-    </>
-  ) : (
-    <>
-      <Send className="h-5 w-5" />
-      <span>Submit Request</span>
-      <ChevronRight className="h-5 w-5" />
-    </>
-  )}
-</button>
-
+                onClick={submitReport}
+                disabled={isSubmitting || !canSubmit}
+                aria-disabled={isSubmitting || !canSubmit}
+                className={`px-12 py-4 font-bold rounded-xl transition-all duration-300 flex items-center space-x-3 text-lg ${
+                  isSubmitting || !canSubmit
+                    ? 'bg-gray-600 cursor-not-allowed opacity-60'
+                    : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 shadow-lg shadow-green-500/25 hover:shadow-green-500/40 transform hover:scale-105'
+                } text-white`}
+              >
+                {isSubmitting ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                    <span>Submitting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="h-5 w-5" />
+                    <span>Submit Request</span>
+                    <ChevronRight className="h-5 w-5" />
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>
