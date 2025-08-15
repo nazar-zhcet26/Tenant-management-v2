@@ -239,11 +239,12 @@ async function notifyReportSubmission(data) {
   const submitReport = async () => {
   if (
     !currentReport.property_id ||
-    !currentReport.title ||
-    !currentReport.description ||
-    !currentReport.category
+    !currentReport.title?.trim() ||
+    !currentReport.description?.trim() ||
+    !currentReport.category ||
+    !currentReport.location?.trim()
   ) {
-    alert('Please fill in all required fields (including property).');
+    alert('Please fill in all required fields (including Property, Title, Description, Category, and Unit/Apartment).');
     return;
   }
   setIsSubmitting(true);
@@ -317,6 +318,14 @@ async function notifyReportSubmission(data) {
       coordinates: null,
       address: ''
     });
+
+    const canSubmit =
+  !!(currentReport?.property_id &&
+     currentReport?.title?.trim() &&
+     currentReport?.description?.trim() &&
+     currentReport?.category &&
+     currentReport?.location?.trim());
+
 
     alert('✅ Maintenance request submitted!');
 
@@ -520,15 +529,16 @@ async function notifyReportSubmission(data) {
               <div>
                 <label className="block text-white font-semibold mb-3">
                   <MapPin className="h-4 w-4 inline mr-2" />
-                  Location in Property
+                  Location in Property <span className="text-red-400">*</span>
                 </label>
                 <input
                   type="text"
                   value={currentReport.location}
                   onChange={e => handleInputChange('location', e.target.value)}
-                  placeholder="e.g., Master Bathroom, Unit 2A"
-                  className="w-full px-6 py-4 bg-white/10 backdrop-blur border border-white/20 rounded-xl text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300"
-                />
+                  placeholder="e.g., Apartment 1204-B, bathroom (required)"
+                  required
+                  className="w-full px-6 py-4 bg-white/10 backdrop-blur border border-white/20 rounded-xl text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300"/>
+                  {!currentReport.location?.trim() && (<p className="mt-1 text-xs text-red-300">Unit/Apartment is required.</p>)}  
               </div>
               {/* GPS Location */}
               <div>
@@ -775,27 +785,28 @@ async function notifyReportSubmission(data) {
             )}
             <div className="flex justify-end">
               <button
-                onClick={submitReport}
-                disabled={isSubmitting}
-                className={`px-12 py-4 font-bold rounded-xl transition-all duration-300 flex items-center space-x-3 text-lg ${
-                  isSubmitting
-                    ? 'bg-gray-600 cursor-not-allowed'
-                    : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 shadow-lg shadow-green-500/25 hover:shadow-green-500/40 transform hover:scale-105'
-                } text-white`}
-              >
-                {isSubmitting ? (
-                  <>
-                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                    <span>Submitting...</span>
-                  </>
-                ) : (
-                  <>
-                    <Send className="h-5 w-5" />
-                    <span>Submit Request</span>
-                    <ChevronRight className="h-5 w-5" />
-                  </>
-                )}
-              </button>
+  onClick={submitReport}
+  disabled={isSubmitting || !canSubmit}
+  className={`px-12 py-4 font-bold rounded-xl transition-all duration-300 flex items-center space-x-3 text-lg ${
+    isSubmitting || !canSubmit
+      ? 'bg-gray-600 cursor-not-allowed opacity-60'
+      : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 shadow-lg shadow-green-500/25 hover:shadow-green-500/40 transform hover:scale-105'
+  } text-white`}
+>
+  {isSubmitting ? (
+    <>
+      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+      <span>Submitting...</span>
+    </>
+  ) : (
+    <>
+      <Send className="h-5 w-5" />
+      <span>Submit Request</span>
+      <ChevronRight className="h-5 w-5" />
+    </>
+  )}
+</button>
+
             </div>
           </div>
         </div>
