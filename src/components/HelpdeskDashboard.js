@@ -25,12 +25,42 @@ async function loadJsPDF() {
 
 /** Status colors (badge + subtle ring accent) */
 const STATUS = {
-  pending:   { badge: "bg-amber-500/15 text-amber-300 border border-amber-500/30", ring: "ring-amber-500/20" },
-  assigned:  { badge: "bg-sky-500/15 text-sky-300 border border-sky-500/30",       ring: "ring-sky-500/20" },
-  accepted:  { badge: "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30", ring: "ring-emerald-500/20" },
-  review:    { badge: "bg-violet-500/15 text-violet-300 border border-violet-500/30",     ring: "ring-violet-500/20" },
-  completed: { badge: "bg-teal-500/15 text-teal-300 border border-teal-500/30",           ring: "ring-teal-500/20" },
-  rejected:  { badge: "bg-rose-500/15 text-rose-300 border border-rose-500/30",           ring: "ring-rose-500/20" },
+  pending:   {
+    badge: "bg-amber-500/15 text-amber-300 border border-amber-500/30",
+    ring: "ring-amber-500/20",
+    cardBg: "bg-amber-500/10",
+    cardBorder: "border-amber-500/25",
+  },
+  assigned:  {
+    badge: "bg-sky-500/15 text-sky-300 border border-sky-500/30",
+    ring: "ring-sky-500/20",
+    cardBg: "bg-sky-500/10",
+    cardBorder: "border-sky-500/25",
+  },
+  accepted:  {
+    badge: "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30",
+    ring: "ring-emerald-500/20",
+    cardBg: "bg-emerald-500/10",
+    cardBorder: "border-emerald-500/25",
+  },
+  review:    {
+    badge: "bg-violet-500/15 text-violet-300 border border-violet-500/30",
+    ring: "ring-violet-500/20",
+    cardBg: "bg-violet-500/10",
+    cardBorder: "border-violet-500/25",
+  },
+  completed: {
+    badge: "bg-teal-500/15 text-teal-300 border border-teal-500/30",
+    ring: "ring-teal-500/20",
+    cardBg: "bg-teal-500/10",
+    cardBorder: "border-teal-500/25",
+  },
+  rejected:  {
+    badge: "bg-rose-500/15 text-rose-300 border border-rose-500/30",
+    ring: "ring-rose-500/20",
+    cardBg: "bg-rose-500/10",
+    cardBorder: "border-rose-500/25",
+  },
 };
 
 /** ====== LIGHTER THEME TWEAKS ====== */
@@ -282,9 +312,10 @@ export default function HelpdeskDashboard() {
               <div
                 key={a.id}
                 className={cn(
-                  "rounded-2xl p-4 shadow-sm border",
-                  PANEL_BG, PANEL_BORDER,
-                  "hover:border-white/20 transition",
+                  "rounded-2xl p-4 shadow-sm border transition",
+                  s.cardBg || PANEL_BG,        // status-tinted background
+                  s.cardBorder || PANEL_BORDER, // status-tinted border
+                  "hover:border-white/30",
                   "ring-1", s.ring
                 )}
               >
@@ -776,3 +807,4 @@ function AssignModal({ assignment, onClose, contractors, rejectedBy, onAssign })
     </div>
   );
 }
+
