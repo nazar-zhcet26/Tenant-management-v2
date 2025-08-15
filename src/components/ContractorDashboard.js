@@ -430,6 +430,7 @@ export default function ContractorDashboard() {
         <div className="text-sm text-white/80 space-y-1">
           {propName && <div><span className="text-white/60">Property:</span> {propName}</div>}
           <div><span className="text-white/60">Address:</span> {fullAddress}</div>
+          <div><span className="text-white/60">Unit:</span> {mr?.location || "—"}</div>
           <div><span className="text-white/60">Category:</span> {mr?.category}</div>
           <div><span className="text-white/60">Urgency:</span> {mr?.urgency}</div>
         </div>
@@ -559,7 +560,9 @@ export default function ContractorDashboard() {
                       <div><span className="text-white/70">Category:</span> {detailsOpenFor?.maintenance_reports?.category || "—"}</div>
                       <div><span className="text-white/70">Urgency:</span> {detailsOpenFor?.maintenance_reports?.urgency || "—"}</div>
                       <div><span className="text-white/70">Property:</span> {detailsOpenFor?.maintenance_reports?.property?.name || "—"}</div>
-                      <div><span className="text-white/70">Address:</span> {detailsOpenFor?.maintenance_reports?.property?.address || detailsOpenFor?.maintenance_reports?.address || detailsOpenFor?.maintenance_reports?.location || "—"}</div>
+                      <div><span className="text-white/70">Address:</span> {detailsOpenFor?.maintenance_reports?.property?.address || detailsOpenFor?.maintenance_reports?.address }</div>
+                      <div><span className="text-white/70">Unit:</span> {detailsOpenFor?.maintenance_reports?.location || "—"}
+</div>
                     </div>
                     <p className="text-sm text-white whitespace-pre-wrap mb-4">
                       {detailsOpenFor?.maintenance_reports?.description || "—"}
@@ -674,3 +677,4 @@ export default function ContractorDashboard() {
     </div>
   );
 }
+
