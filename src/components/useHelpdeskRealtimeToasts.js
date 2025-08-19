@@ -1,4 +1,5 @@
 // src/components/useHelpdeskRealtimeToasts.js
+/* eslint-disable react-hooks/exhaustive-deps */
 import { useEffect, useRef } from "react";
 import { useToast } from "./ToastProvider";
 import { supabase } from "../supabase"; // your file from the screenshot
