@@ -6,28 +6,37 @@ import { supabase } from "../supabase";
 /**
  * Realtime → Toast bridge for Helpdesk.
  * - Listens to 4 tables and shows coalesced toasts with a "Refresh" action.
- * - If helpdeskId is provided, applies server-side filters (ignored if column not present).
+ * - Colors match Helpdesk STATUS: pending=amber, assigned=blue, accepted=green, review=violet, completed=teal, rejected=red.
+ * - Enriches description with Property + Contractor names when possible.
  */
 export function useHelpdeskRealtimeToasts(helpdeskId) {
   const { toast } = useToast();
   const bufferRef = useRef({ count: 0, timer: null });
 
-  const showToast = (label) => {
+  const statusToColor = (status) => {
+    switch ((status || "").toLowerCase()) {
+      case "pending":   return "amber";
+      case "assigned":  return "blue";
+      case "accepted":  return "green";
+      case "review":    return "violet";
+      case "completed": return "teal";
+      case "rejected":  return "red";
+      default:          return "gray";
+    }
+  };
+
+  const showToast = ({ title, description, color }) => {
     const buf = bufferRef.current;
 
-    // If we’re in a 2s coalescing window, just increment
-    if (buf.timer) {
-      buf.count += 1;
-      return;
-    }
+    if (buf.timer) { buf.count += 1; return; }
 
-    // Start window and show the first toast immediately
     buf.count = 1;
     buf.timer = window.setTimeout(() => {
       if (buf.count > 1) {
         toast({
           title: "New activity",
           description: `${buf.count} updates just came in — click Refresh to view.`,
+          color: "gray",
           actionLabel: "Refresh",
           onAction: () => window.dispatchEvent(new Event("pc-refresh")),
         });
@@ -37,94 +46,127 @@ export function useHelpdeskRealtimeToasts(helpdeskId) {
       buf.timer = null;
     }, 2000);
 
-    // First toast
     toast({
-      title: "New activity",
-      description: `${label} — click Refresh to view.`,
+      title,
+      description: `${description} — click Refresh to view.`,
+      color,
       actionLabel: "Refresh",
       onAction: () => window.dispatchEvent(new Event("pc-refresh")),
     });
   };
 
+  // Small helper to fetch names for richer toast text
+  const getNamesForAssignment = async (assignmentId) => {
+    try {
+      const { data, error } = await supabase
+        .from("helpdesk_assignments")
+        .select(`
+          id,
+          contractor:contractor_id ( full_name ),
+          maintenance_reports:report_id (
+            id,
+            property:property_id ( name )
+          )
+        `)
+        .eq("id", assignmentId)
+        .maybeSingle();
+      if (error || !data) return { contractorName: null, propertyName: null };
+      const contractorName = data.contractor?.full_name || null;
+      const propertyName = data.maintenance_reports?.property?.name || null;
+      return { contractorName, propertyName };
+    } catch (_e) {
+      return { contractorName: null, propertyName: null };
+    }
+  };
+
   useEffect(() => {
-    // Helper to build a channel with optional server-side filter
     const subscribe = (key, table, handler, filterColumn) => {
-      const opts = {
-        event: "*",
-        schema: "public",
-        table,
-      };
-      // Only attach filter if we have an id AND a column name to filter by
+      const opts = { event: "*", schema: "public", table };
       if (helpdeskId && filterColumn) {
-        // If the column doesn't exist in the table, Supabase will ignore this filter silently.
         opts.filter = `${filterColumn}=eq.${helpdeskId}`;
       }
-
-      return supabase
-        .channel(key)
-        .on("postgres_changes", opts, handler)
-        .subscribe();
+      return supabase.channel(key).on("postgres_changes", opts, handler).subscribe();
     };
 
-    // 1) helpdesk_assignments — status/assignment changes
+    // 1) helpdesk_assignments — status/assignment changes (assigned/pending/accepted/review/completed/rejected)
     const ch1 = subscribe(
       "helpdesk-assignments",
       "helpdesk_assignments",
-      (p) => {
+      async (p) => {
         const a = (p.new ?? p.old) || {};
-        const id = a.id ? `Ticket #${a.id}` : "A ticket";
-        const change =
-          p.eventType === "UPDATE" ? "updated" :
-          p.eventType === "INSERT" ? "created" :
-          "changed";
-        showToast(`${id} ${change}`);
+        const ticket = a.id || "—";
+        const status = a.status || "changed";
+        const { contractorName, propertyName } = await getNamesForAssignment(ticket);
+        const labelParts = [];
+        labelParts.push(propertyName ? propertyName : "Property");
+        if (contractorName) labelParts.push(`with ${contractorName}`);
+        const desc = `${status} — ${labelParts.join(" ")}`;
+        showToast({
+          title: `Ticket #${String(ticket).slice(0, 8)}`,
+          description: desc,
+          color: statusToColor(status),
+        });
       },
-      // change this to your scoping column if present:
       "helpdesk_user_id"
     );
 
-    // 2) contractor_final_reports — contractor submitted/updated final report
+    // 2) contractor_final_reports — submitted/updated (goes into review → violet)
     const ch2 = subscribe(
       "helpdesk-finalreports",
       "contractor_final_reports",
-      (p) => {
+      async (p) => {
         const fr = (p.new ?? p.old) || {};
-        const id = fr.id ? `Final report ${fr.id}` : "A final report";
-        showToast(`${id} updated by contractor`);
+        const ticket = fr.assignment_id || "—";
+        const { contractorName, propertyName } = await getNamesForAssignment(ticket);
+        const desc = `final report submitted ${contractorName ? `by ${contractorName}` : ""} — ${propertyName || "Property"}`;
+        showToast({
+          title: `Ticket #${String(ticket).slice(0, 8)}`,
+          description: desc,
+          color: "violet",
+        });
       },
-      // if your final reports table also carries helpdesk_user_id or joins, set column name here:
       "helpdesk_user_id"
     );
 
-    // 3) contractor_responses — accept/reject notifications
+    // 3) contractor_responses — accept/reject (green/red)
     const ch3 = subscribe(
       "helpdesk-contractor-responses",
       "contractor_responses",
-      (p) => {
+      async (p) => {
         const r = (p.new ?? p.old) || {};
-        const label =
-          r.status === "accepted"
-            ? `Contractor accepted Ticket #${r.assignment_id}`
-            : r.status === "rejected"
-            ? `Contractor rejected Ticket #${r.assignment_id}${r.reason ? ` — ${r.reason}` : ""}`
-            : `Contractor response on Ticket #${r.assignment_id ?? ""}`;
-        showToast(label);
+        const ticket = r.assignment_id || "—";
+        const status = r.status || "response";
+        const { contractorName, propertyName } = await getNamesForAssignment(ticket);
+        const reason = r.reason ? ` — ${r.reason}` : "";
+        const desc = `${status}${contractorName ? ` by ${contractorName}` : ""}${reason} — ${propertyName || "Property"}`;
+        showToast({
+          title: `Ticket #${String(ticket).slice(0, 8)}`,
+          description: desc,
+          color: status === "accepted" ? "green" : status === "rejected" ? "red" : "gray",
+        });
       },
-      // if contractor_responses has a helpdesk_user_id or equivalent:
       "helpdesk_user_id"
     );
 
-    // 4) maintenance_reports — landlord approvals
+    // 4) maintenance_reports — landlord approvals → pending (amber)
     const ch4 = subscribe(
       "helpdesk-landlord-approvals",
       "maintenance_reports",
-      (p) => {
+      async (p) => {
         const mr = (p.new ?? p.old) || {};
+        // Only signal when status is now approved → Helpdesk sees this as pending intake
         if ((p.eventType === "UPDATE" || p.eventType === "INSERT") && mr.status === "approved") {
-          showToast(`Landlord approved report #${mr.id} — ready to triage`);
+          const ticket = mr.id || "—";
+          // We might not yet have an assignment row, so property name from maintenance_reports would be ideal.
+          // If not directly available, fall back to a generic message.
+          const propertyName = mr.property_name || null; // use if your view/table provides it
+          showToast({
+            title: `Ticket #${String(ticket).slice(0, 8)}`,
+            description: `approved by landlord — ${propertyName || "Pending intake"}`,
+            color: "amber",
+          });
         }
       },
-      // if maintenance_reports has a helpdesk_user_id routing column:
       "helpdesk_user_id"
     );
 
