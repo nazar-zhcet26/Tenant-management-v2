@@ -5,6 +5,7 @@ import {
   RefreshCcw, Building2, Info, UserPlus, CheckCircle2, Undo2,
   ClipboardList, FileText, FileUp, Eye, Mail, Phone, ShieldAlert, Tag
 } from "lucide-react";
+import { useHelpdeskRealtimeToasts } from "./useHelpdeskRealtimeToasts"; // ⬅️ added
 
 /** ====== CONFIG ====== */
 const ATTACHMENTS_BUCKET = "maintenance-files"; // private bucket
@@ -75,6 +76,9 @@ export default function HelpdeskDashboard() {
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
 
+  // ⬇️ start realtime toasts (pass user?.id later to scope)
+  useHelpdeskRealtimeToasts(/* user?.id */);
+
   // data
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -135,6 +139,13 @@ export default function HelpdeskDashboard() {
   }, []);
 
   useEffect(() => { if (authReady) loadData(); }, [authReady, loadData]);
+
+  // ⬇️ bridge toast "Refresh" to your loader
+  useEffect(() => {
+    const onRefresh = () => loadData();
+    window.addEventListener("pc-refresh", onRefresh);
+    return () => window.removeEventListener("pc-refresh", onRefresh);
+  }, [loadData]);
 
   /* signed url helper */
   const getSigned = useCallback(async (path) => {
@@ -807,4 +818,3 @@ function AssignModal({ assignment, onClose, contractors, rejectedBy, onAssign })
     </div>
   );
 }
-
